@@ -4,7 +4,7 @@ Sistema de Social Intelligence e operação de LinkedIn orquestrado por **Leonar
 
 ## Estado
 
-- Status: bootstrap
+- Status: Wave 00–03 local-only foundation
 - Owner operacional: Leonard / Hermes
 - Repositório canônico: `mensuraeng/LinkedIn_Leonard`
 - Branch canônica: `main`
@@ -16,6 +16,31 @@ Sistema de Social Intelligence e operação de LinkedIn orquestrado por **Leonar
 - `docs/PRD.md` — requisitos completos do produto
 - `docs/RUNBOOK.md` — implantação e rotina operacional do Leonard
 - `AGENTS.md` — contrato dos agentes e regras de contribuição
+
+## Fundação local-only
+
+O pacote Python em `src/linkedin_leonard` implementa somente o circuito simulado:
+
+```text
+Mission → Policy → Approval → Mock Gateway → Verification → Audit
+```
+
+- `PolicyEngine` nega ações desconhecidas e mantém todos os writes desligados por padrão. Um write exige, ao mesmo tempo, chave global, política explícita da conta/ação e capability de escrita.
+- `Snapshot` canoniza o payload e vincula aprovação, ação e conta por SHA-256. Aprovações expiram e não sobrevivem a qualquer alteração do snapshot.
+- `AuditLog` é append-only pela API pública. Eventos expõem somente hash, contagem, chaves allowlisted e códigos sanitizados; conteúdo, segredos e PII não são registrados.
+- `MockLinkedInGateway` existe apenas em memória, aceita falhas injetadas (`401`, `403`, `429`, `timeout`) e deduplica somente quando a chave de idempotência e o fingerprint ação/conta/payload são idênticos; colisões são recusadas. O simulador aceita apenas sua identidade canônica e capability mock-only, recusando subclasses, adaptadores e objetos substitutos antes de qualquer leitura ou escrita.
+- `MockVerificationBoundary` é uma fronteira distinta, também apenas em memória e mock-only. Ela confirma o receipt vinculado ao snapshot ou devolve `not_found`, `mismatch` ou `timeout`.
+- `Simulator` confirma uma missão somente depois de resultado positivo do gateway e de confirmação positiva da verificação do receipt/snapshot.
+
+Não há adapter real, transporte HTTP, navegador, OAuth, cookie, token, endpoint ou dependência de terceiros. A arquitetura não oferece ponto de injeção para transporte real; o teste estrutural em `tests/test_foundation.py` protege esse limite.
+
+## Execução local
+
+Requer Python 3.11 ou superior e nenhuma instalação adicional:
+
+```bash
+python -m unittest discover -v
+```
 
 ## Regra de ouro
 
