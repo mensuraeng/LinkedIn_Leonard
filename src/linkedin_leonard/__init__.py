@@ -11,12 +11,15 @@ from .core import (
     GatewayResult,
     Mission,
     MockLinkedInGateway,
+    MockVerificationBoundary,
     PolicyDecision,
     PolicyEngine,
     Risk,
     SimulationOutcome,
     Simulator,
     Snapshot,
+    VerificationOutcome,
+    VerificationResult,
 )
 
 __all__ = [
@@ -30,10 +33,13 @@ __all__ = [
     "GatewayResult",
     "Mission",
     "MockLinkedInGateway",
+    "MockVerificationBoundary",
     "PolicyDecision",
     "PolicyEngine",
     "Risk",
     "SimulationOutcome",
     "Simulator",
     "Snapshot",
+    "VerificationOutcome",
+    "VerificationResult",
 ]

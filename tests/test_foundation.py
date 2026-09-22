@@ -15,12 +15,15 @@ from linkedin_leonard import (
     ApprovalGate,
     AuditLog,
     GatewayOutcome,
+    GatewayResult,
     Mission,
     MockLinkedInGateway,
+    MockVerificationBoundary,
     PolicyEngine,
     Risk,
     Simulator,
     Snapshot,
+    VerificationOutcome,
 )
 
 
@@ -199,14 +202,36 @@ class AuditTests(unittest.TestCase):
             audit.record("gateway_result", status="failed", trace_id="person@example.com")
 
 
+class VerificationTests(unittest.TestCase):
+    def test_mock_verification_exposes_all_failure_outcomes(self) -> None:
+        snapshot = Snapshot.capture(READ, ACCOUNT, {"format": "summary"})
+        gateway_result = GatewayResult(
+            True, receipt_id="READ-0001", snapshot_fingerprint=snapshot.fingerprint
+        )
+        for expected in (
+            VerificationOutcome.NOT_FOUND,
+            VerificationOutcome.MISMATCH,
+            VerificationOutcome.TIMEOUT,
+        ):
+            with self.subTest(expected=expected):
+                result = MockVerificationBoundary(outcomes=(expected,)).verify(gateway_result, snapshot)
+                self.assertFalse(result.confirmed)
+                self.assertEqual(result.error_code, expected.value)
+
+
 class SimulatorTests(unittest.TestCase):
-    def make_simulator(self, *outcomes: GatewayOutcome) -> tuple[Simulator, MockLinkedInGateway, AuditLog]:
+    def make_simulator(
+        self,
+        *outcomes: GatewayOutcome,
+        verification: MockVerificationBoundary | None = None,
+    ) -> tuple[Simulator, MockLinkedInGateway, AuditLog]:
         gateway = MockLinkedInGateway(outcomes=outcomes)
         audit = AuditLog(today=lambda: NOW.date())
         simulator = Simulator(
             policy=policy(global_write_enabled=True),
             approval_gate=ApprovalGate(now=lambda: NOW),
             gateway=gateway,
+            verification=verification or MockVerificationBoundary(),
             audit=audit,
         )
         return simulator, gateway, audit
@@ -305,6 +330,56 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(outcome.error_code, "idempotency_conflict")
         self.assertEqual(gateway.write_count, 1)
         self.assertEqual(audit.events[-1].kind, "verification_failed")
+
+    def test_substitute_gateway_is_blocked_before_any_read_or_write(self) -> None:
+        class SuccessReportingSubstitute(MockLinkedInGateway):
+            pass
+
+        substitute = SuccessReportingSubstitute()
+        audit = AuditLog(today=lambda: NOW.date())
+        simulator = Simulator(
+            policy=policy(),
+            approval_gate=ApprovalGate(now=lambda: NOW),
+            gateway=substitute,  # type: ignore[arg-type]
+            verification=MockVerificationBoundary(),
+            audit=audit,
+        )
+
+        outcome = simulator.run(Mission(READ, ACCOUNT, {"format": "summary"}))
+
+        self.assertFalse(outcome.confirmed)
+        self.assertEqual(outcome.status, "mock_boundary_denied")
+        self.assertEqual((substitute.read_count, substitute.write_count), (0, 0))
+        self.assertEqual(audit.events[-1].kind, "mock_boundary_denied")
+        self.assertEqual(audit.events[-1].metadata["status"], "gateway_not_mock")
+
+    def test_gateway_success_with_verification_failure_is_never_confirmed(self) -> None:
+        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="verify-failure")
+        verification = MockVerificationBoundary(outcomes=(VerificationOutcome.MISMATCH,))
+        simulator, gateway, audit = self.make_simulator(verification=verification)
+
+        outcome = simulator.run(mission, approval_for(mission))
+
+        self.assertFalse(outcome.confirmed)
+        self.assertEqual(outcome.status, "verification_failed")
+        self.assertEqual(outcome.error_code, "mismatch")
+        self.assertEqual(gateway.write_count, 1)
+        self.assertEqual(audit.events[-1].kind, "verification_failed")
+        self.assertEqual(audit.events[-1].metadata["error_code"], "mismatch")
+
+    def test_verified_idempotent_write_remains_confirmed(self) -> None:
+        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="verify-idempotent")
+        verification = MockVerificationBoundary()
+        simulator, gateway, _ = self.make_simulator(verification=verification)
+
+        first = simulator.run(mission, approval_for(mission))
+        duplicate = simulator.run(mission, approval_for(mission))
+
+        self.assertTrue(first.confirmed)
+        self.assertTrue(duplicate.confirmed)
+        self.assertEqual(first.receipt_id, duplicate.receipt_id)
+        self.assertEqual(gateway.write_count, 1)
+        self.assertEqual(verification.verify_count, 2)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 
 GLOBAL_WRITE_ENABLED = False
@@ -198,26 +198,48 @@ class GatewayResult:
     confirmed: bool
     receipt_id: str | None = None
     error_code: str | None = None
+    snapshot_fingerprint: str | None = None
+
+
+class VerificationOutcome(str, Enum):
+    SUCCESS = "success"
+    NOT_FOUND = "not_found"
+    MISMATCH = "mismatch"
+    TIMEOUT = "timeout"
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    confirmed: bool
+    error_code: str | None = None
+
+
+_MOCK_ONLY_CAPABILITY = object()
 
 
 class MockLinkedInGateway:
     """In-memory simulator. It has no transport object or external adapter hook."""
 
     def __init__(self, outcomes: tuple[GatewayOutcome, ...] = ()) -> None:
+        self._mock_only_capability = _MOCK_ONLY_CAPABILITY
         self._outcomes = deque(outcomes)
         self._receipts: dict[str, tuple[str, GatewayResult]] = {}
         self.read_count = 0
         self.write_count = 0
 
-    def _next_result(self, receipt_prefix: str, sequence: int) -> GatewayResult:
+    def _next_result(self, receipt_prefix: str, sequence: int, snapshot: Snapshot) -> GatewayResult:
         outcome = self._outcomes.popleft() if self._outcomes else GatewayOutcome.SUCCESS
         if outcome is GatewayOutcome.SUCCESS:
-            return GatewayResult(True, receipt_id=f"{receipt_prefix}-{sequence:04d}")
+            return GatewayResult(
+                True,
+                receipt_id=f"{receipt_prefix}-{sequence:04d}",
+                snapshot_fingerprint=snapshot.fingerprint,
+            )
         return GatewayResult(False, error_code=outcome.value)
 
     def read(self, action: str, account: str, payload: Mapping[str, Any]) -> GatewayResult:
         self.read_count += 1
-        return self._next_result("READ", self.read_count)
+        return self._next_result("READ", self.read_count, Snapshot.capture(action, account, payload))
 
     def write(
         self,
@@ -226,16 +248,43 @@ class MockLinkedInGateway:
         payload: Mapping[str, Any],
         idempotency_key: str,
     ) -> GatewayResult:
-        request_fingerprint = Snapshot.capture(action, account, payload).fingerprint
+        snapshot = Snapshot.capture(action, account, payload)
+        request_fingerprint = snapshot.fingerprint
         if idempotency_key in self._receipts:
             stored_fingerprint, stored_result = self._receipts[idempotency_key]
             if stored_fingerprint != request_fingerprint:
                 return GatewayResult(False, error_code="idempotency_conflict")
             return stored_result
         self.write_count += 1
-        result = self._next_result("WRITE", self.write_count)
+        result = self._next_result("WRITE", self.write_count, snapshot)
         self._receipts[idempotency_key] = (request_fingerprint, result)
         return result
+
+
+class MockVerificationBoundary:
+    """In-memory receipt/snapshot verifier with no external adapter hook."""
+
+    def __init__(self, outcomes: tuple[VerificationOutcome, ...] = ()) -> None:
+        self._mock_only_capability = _MOCK_ONLY_CAPABILITY
+        self._outcomes = deque(outcomes)
+        self.verify_count = 0
+
+    def verify(self, result: GatewayResult, snapshot: Snapshot) -> VerificationResult:
+        self.verify_count += 1
+        if (
+            not result.confirmed
+            or result.receipt_id is None
+            or result.snapshot_fingerprint != snapshot.fingerprint
+        ):
+            return VerificationResult(False, VerificationOutcome.MISMATCH.value)
+        outcome = self._outcomes.popleft() if self._outcomes else VerificationOutcome.SUCCESS
+        if outcome is VerificationOutcome.SUCCESS:
+            return VerificationResult(True)
+        return VerificationResult(False, outcome.value)
+
+
+def _is_canonical_mock_boundary(value: object, expected_type: type[object]) -> bool:
+    return type(value) is expected_type and getattr(value, "_mock_only_capability", None) is _MOCK_ONLY_CAPABILITY
 
 
 @dataclass(frozen=True)
@@ -261,12 +310,14 @@ class Simulator:
         *,
         policy: PolicyEngine,
         approval_gate: ApprovalGate,
-        gateway: MockLinkedInGateway,
+        gateway: object,
+        verification: object | None = None,
         audit: AuditLog,
     ) -> None:
         self._policy = policy
         self._approval_gate = approval_gate
         self._gateway = gateway
+        self._verification = verification or MockVerificationBoundary()
         self._audit = audit
 
     def run(self, mission: Mission, approval: Approval | None = None) -> SimulationOutcome:
@@ -274,6 +325,12 @@ class Simulator:
         self._audit.record(
             "mission_received", payload=mission.payload, status="received", trace_id=trace_id
         )
+        if not _is_canonical_mock_boundary(self._gateway, MockLinkedInGateway):
+            self._audit.record("mock_boundary_denied", status="gateway_not_mock", trace_id=trace_id)
+            return SimulationOutcome(trace_id, "mock_boundary_denied", False)
+        if not _is_canonical_mock_boundary(self._verification, MockVerificationBoundary):
+            self._audit.record("mock_boundary_denied", status="verification_not_mock", trace_id=trace_id)
+            return SimulationOutcome(trace_id, "mock_boundary_denied", False)
         decision = self._policy.decide(mission.action, mission.account)
         if not decision.allowed:
             self._audit.record("policy_denied", status=decision.reason, trace_id=trace_id)
@@ -288,8 +345,10 @@ class Simulator:
                 return SimulationOutcome(trace_id, "approval_denied", False)
             self._audit.record("approval_allowed", status="allowed", trace_id=trace_id)
 
+        snapshot = Snapshot.capture(mission.action, mission.account, mission.payload)
+        gateway = cast(MockLinkedInGateway, self._gateway)
         result = (
-            self._gateway.write(
+            gateway.write(
                 mission.action,
                 mission.account,
                 mission.payload,
@@ -298,7 +357,7 @@ class Simulator:
                 ).fingerprint,
             )
             if decision.is_write
-            else self._gateway.read(mission.action, mission.account, mission.payload)
+            else gateway.read(mission.action, mission.account, mission.payload)
         )
         self._audit.record(
             "gateway_result",
@@ -307,17 +366,29 @@ class Simulator:
             error_code=result.error_code,
             trace_id=trace_id,
         )
-        verification_kind = "verification_confirmed" if result.confirmed else "verification_failed"
+        if not result.confirmed:
+            self._audit.record(
+                "verification_failed",
+                status="not_confirmed",
+                error_code=result.error_code,
+                trace_id=trace_id,
+            )
+            return SimulationOutcome(
+                trace_id, "not_confirmed", False, result.receipt_id, result.error_code
+            )
+        verification = cast(MockVerificationBoundary, self._verification)
+        verification_result = verification.verify(result, snapshot)
+        verification_kind = "verification_confirmed" if verification_result.confirmed else "verification_failed"
         self._audit.record(
             verification_kind,
-            status="confirmed" if result.confirmed else "not_confirmed",
-            error_code=result.error_code,
+            status="confirmed" if verification_result.confirmed else "not_confirmed",
+            error_code=verification_result.error_code,
             trace_id=trace_id,
         )
         return SimulationOutcome(
             trace_id,
-            "confirmed" if result.confirmed else "not_confirmed",
-            result.confirmed,
+            "confirmed" if verification_result.confirmed else "verification_failed",
+            verification_result.confirmed,
             result.receipt_id,
-            result.error_code,
+            verification_result.error_code,
         )
