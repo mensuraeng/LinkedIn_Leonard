@@ -4,7 +4,7 @@ Sistema de Social Intelligence e operação de LinkedIn orquestrado por **Leonar
 
 ## Estado
 
-- Status: Wave 00–03 local-only foundation
+- Status: Wave 04 local-only simulator and contract expansion
 - Owner operacional: Leonard / Hermes
 - Repositório canônico: `mensuraeng/LinkedIn_Leonard`
 - Branch canônica: `main`
@@ -31,6 +31,10 @@ Mission → Policy → Approval → Mock Gateway → Verification → Audit
 - `MockLinkedInGateway` existe apenas em memória, aceita falhas injetadas (`401`, `403`, `429`, `timeout`) e deduplica somente quando a chave de idempotência e o fingerprint ação/conta/payload são idênticos; colisões são recusadas. O simulador aceita apenas sua identidade canônica e capability mock-only, recusando subclasses, adaptadores e objetos substitutos antes de qualquer leitura ou escrita.
 - `MockVerificationBoundary` é uma fronteira distinta, também apenas em memória e mock-only. Ela confirma o receipt vinculado ao snapshot ou devolve `not_found`, `mismatch` ou `timeout`.
 - `Simulator` confirma uma missão somente depois de resultado positivo do gateway e de confirmação positiva da verificação do receipt/snapshot.
+- `AgentRegistry` aplica capability, conta autorizada, teto de autonomia, orçamento e timeout; ausência de agente, capability ou conta é negada. Um subagente não pode executar write/publicação.
+- `BrandRegistry` e `AccountRegistry` separam as políticas mínimas de MENSURA, MIA, PCS e perfil pessoal.
+- `QuotaBudget` degrada autonomia em `NORMAL`, `WATCH`, `CONSERVE` e `CRITICAL`; `CircuitBreaker` abre para writes após a quantidade configurada de falhas mock `401`, `403`, `429` ou `timeout`.
+- `CortexEventLog` mantém somente eventos sanitizados em memória (`content`, `approval`, `publication_simulated`), com hash de payload e sem integração Córtex.
 
 Não há adapter real, transporte HTTP, navegador, OAuth, cookie, token, endpoint ou dependência de terceiros. A arquitetura não oferece ponto de injeção para transporte real; o teste estrutural em `tests/test_foundation.py` protege esse limite.
 

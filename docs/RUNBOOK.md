@@ -200,6 +200,14 @@ Leonard
 
 Somente após testes satisfatórios o adapter real pode substituir o mock.
 
+### Wave 04 — contratos e degradação local
+
+- `GLOBAL_WRITE_ENABLED` permanece `false`; os testes de write usam apenas configurações explícitas e gateway em memória.
+- Todo subagente precisa de contrato no `AgentRegistry`: capability, conta permitida, autonomia máxima, orçamento e timeout. Ausência de qualquer autorização falha fechada; subagente não publica.
+- `BrandRegistry` e `AccountRegistry` mantêm isolamento de política entre MENSURA, MIA, PCS e perfil pessoal.
+- `QuotaBudget` rebaixa autonomia: `<60% NORMAL`, `60–<75% WATCH`, `75–<90% CONSERVE`, `>=90% CRITICAL`. `CircuitBreaker` bloqueia writes após o limiar configurado de `401`, `403`, `429` ou `timeout` mock.
+- Eventos candidatos ao Córtex são estritamente locais e sanitizados: hash do payload e estado, nunca conteúdo, credencial ou PII. Não há chamada Córtex nesta wave.
+
 ## 11. Segurança
 
 Nunca commitar:

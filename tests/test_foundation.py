@@ -9,17 +9,29 @@ import re
 import unittest
 
 from linkedin_leonard import (
+    AccountRegistry,
     AccountPolicy,
+    AccountProfile,
+    AgentContract,
+    AgentRegistry,
     ActionPolicy,
     Approval,
     ApprovalGate,
     AuditLog,
+    AutonomyLevel,
+    BrandProfile,
+    BrandRegistry,
+    CircuitBreaker,
+    CircuitState,
+    CortexEventLog,
     GatewayOutcome,
     GatewayResult,
     Mission,
     MockLinkedInGateway,
     MockVerificationBoundary,
     PolicyEngine,
+    QuotaBudget,
+    QuotaState,
     Risk,
     Simulator,
     Snapshot,
@@ -217,6 +229,140 @@ class VerificationTests(unittest.TestCase):
                 result = MockVerificationBoundary(outcomes=(expected,)).verify(gateway_result, snapshot)
                 self.assertFalse(result.confirmed)
                 self.assertEqual(result.error_code, expected.value)
+
+
+class ContractRegistryTests(unittest.TestCase):
+    def test_agent_registry_fails_closed_for_missing_capability_or_account(self) -> None:
+        registry = AgentRegistry(
+            {
+                "copywriter": AgentContract(
+                    capabilities=frozenset({"draft_content"}),
+                    allowed_accounts=frozenset({"mensura"}),
+                    max_autonomy=AutonomyLevel.L1,
+                    budget=2,
+                    timeout_seconds=30,
+                )
+            }
+        )
+
+        self.assertTrue(
+            registry.authorize("copywriter", "draft_content", "mensura", AutonomyLevel.L1).allowed
+        )
+        for capability, account in (("publish", "mensura"), ("draft_content", "mia")):
+            with self.subTest(capability=capability, account=account):
+                self.assertFalse(
+                    registry.authorize("copywriter", capability, account, AutonomyLevel.L1).allowed
+                )
+        self.assertFalse(registry.authorize("missing", "draft_content", "mensura", AutonomyLevel.L0).allowed)
+
+    def test_brand_and_account_registries_isolate_each_account_policy(self) -> None:
+        brands = BrandRegistry(
+            {
+                "mensura": BrandProfile("mensura", frozenset({"engineering"})),
+                "mia": BrandProfile("mia", frozenset({"architecture"})),
+                "pcs": BrandProfile("pcs", frozenset({"construction"})),
+                "personal": BrandProfile("personal", frozenset({"leadership"})),
+            }
+        )
+        accounts = AccountRegistry(
+            {
+                "mensura": AccountProfile("mensura", "mensura", AutonomyLevel.L2),
+                "mia": AccountProfile("mia", "mia", AutonomyLevel.L1),
+                "pcs": AccountProfile("pcs", "pcs", AutonomyLevel.L1),
+                "personal": AccountProfile("personal", "personal", AutonomyLevel.L2),
+            },
+            brands,
+        )
+
+        self.assertTrue(accounts.authorize("mensura", "engineering", AutonomyLevel.L2).allowed)
+        self.assertFalse(accounts.authorize("mia", "engineering", AutonomyLevel.L1).allowed)
+        self.assertFalse(accounts.authorize("unknown", "engineering", AutonomyLevel.L0).allowed)
+
+
+class QuotaAndCircuitBreakerTests(unittest.TestCase):
+    def test_quota_states_degrade_the_maximum_autonomy(self) -> None:
+        cases = (
+            (0, QuotaState.NORMAL, AutonomyLevel.L4),
+            (60, QuotaState.WATCH, AutonomyLevel.L2),
+            (75, QuotaState.CONSERVE, AutonomyLevel.L1),
+            (90, QuotaState.CRITICAL, AutonomyLevel.L0),
+        )
+        for used, expected_state, expected_autonomy in cases:
+            with self.subTest(used=used):
+                quota = QuotaBudget("mock-posts", daily_limit=100, used=used)
+                self.assertEqual(quota.state, expected_state)
+                self.assertEqual(quota.max_autonomy, expected_autonomy)
+
+    def test_circuit_breaker_blocks_writes_after_configured_gateway_failures(self) -> None:
+        breaker = CircuitBreaker(threshold=2)
+        self.assertTrue(breaker.allows_write)
+        breaker.record("401")
+        self.assertEqual(breaker.state, CircuitState.CLOSED)
+        breaker.record("429")
+
+        self.assertEqual(breaker.state, CircuitState.OPEN)
+        self.assertFalse(breaker.allows_write)
+        breaker.record("success")
+        self.assertEqual(breaker.state, CircuitState.OPEN)
+
+
+class SimulatorContractTests(unittest.TestCase):
+    def test_delegated_mission_never_publishes_and_emits_sanitized_local_events(self) -> None:
+        mission = Mission(
+            WRITE,
+            ACCOUNT,
+            {"text": "content that must not enter event metadata"},
+            idempotency_key="delegated",
+            agent_id="copywriter",
+            capability="draft_content",
+            autonomy=AutonomyLevel.L1,
+        )
+        agents = AgentRegistry(
+            {
+                "copywriter": AgentContract(
+                    capabilities=frozenset({"draft_content"}),
+                    allowed_accounts=frozenset({ACCOUNT}),
+                    max_autonomy=AutonomyLevel.L1,
+                    budget=1,
+                    timeout_seconds=30,
+                )
+            }
+        )
+        events = CortexEventLog()
+        gateway = MockLinkedInGateway()
+        simulator = Simulator(
+            policy=policy(global_write_enabled=True),
+            approval_gate=ApprovalGate(now=lambda: NOW),
+            gateway=gateway,
+            audit=AuditLog(today=lambda: NOW.date()),
+            agent_registry=agents,
+            cortex_events=events,
+        )
+
+        outcome = simulator.run(mission, approval_for(mission))
+
+        self.assertFalse(outcome.confirmed)
+        self.assertEqual(outcome.status, "agent_publish_denied")
+        self.assertEqual(gateway.write_count, 0)
+        serialized = json.dumps([dict(event.metadata) for event in events.events])
+        self.assertIn("content", [event.kind for event in events.events])
+        self.assertNotIn("content that must not enter event metadata", serialized)
+
+    def test_open_circuit_blocks_a_subsequent_approved_write_before_gateway(self) -> None:
+        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="circuit")
+        breaker = CircuitBreaker(threshold=1)
+        gateway = MockLinkedInGateway(outcomes=(GatewayOutcome.RATE_LIMITED,))
+        simulator = Simulator(
+            policy=policy(global_write_enabled=True),
+            approval_gate=ApprovalGate(now=lambda: NOW),
+            gateway=gateway,
+            audit=AuditLog(today=lambda: NOW.date()),
+            circuit_breaker=breaker,
+        )
+
+        self.assertEqual(simulator.run(mission, approval_for(mission)).status, "not_confirmed")
+        self.assertEqual(simulator.run(mission, approval_for(mission)).status, "circuit_open")
+        self.assertEqual(gateway.write_count, 1)
 
 
 class SimulatorTests(unittest.TestCase):
