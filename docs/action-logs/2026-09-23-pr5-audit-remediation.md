@@ -34,6 +34,12 @@ Status:
 - Waves 00–03: MERGED_WITH_FINDINGS pending final-head review.
 - Wave 05/OAuth and real writes: NO-GO.
 
+Final-head review follow-up commit: `31fe2a79313d223680112dd4e4f48c70aaad024f`
+
+- Closed the final-head P1 by requiring `AccountRegistry` whenever a mission declares a topic.
+- Closed the final-head P2 scanner findings with prefixed credential-name detection and additional common HTTP client imports.
+- Added three regressions; local suite now has 42 passing tests.
+
 decisão: manter PR #5 aberta sem merge e exigir checks/revisão no head final
 risco: promoção sem CI e revisão associadas ao SHA final não é autorizada
 procedimento: validar Actions, solicitar revisão Codex e revisão independente antes de decidir promotion
