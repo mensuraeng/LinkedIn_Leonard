@@ -63,3 +63,14 @@ decisão: manter PR #5 aberta sem merge e exigir checks/revisão no head final
 risco: promoção sem CI e revisão associadas ao SHA final não é autorizada
 procedimento: validar Actions, solicitar revisão Codex e revisão independente antes de decidir promotion
 estado operacional: correções locais implementadas e verificadas; nenhuma integração externa foi adicionada
+
+Final scanner-boundary follow-up:
+
+- Replaced the source-tree transport import denylist with a fail-closed absolute-import allowlist for the imports used by `src/linkedin_leonard`; relative imports remain permitted.
+- Blocked `__import__`, `exec`, `eval`, and `compile` calls plus their source-order and `__builtins__` aliases in the source-tree scanner; runtime reflection and global rebinding also fail closed, including calculated module strings, so network and shell escape paths fail without client-specific denylist expansion.
+- Added RED/GREEN regressions for dynamic asyncio access, prohibited imports, dynamic imports, dynamic execution, source-tree acceptance, and credential literals concatenated with `+`.
+
+decisão: PR #5 continua aberta; nenhuma solicitação de merge foi executada
+risco: novos imports absolutos e execução dinâmica em `src` agora falham antes de integração
+procedimento: manter allowlist de imports do SOURCE_ROOT e executar os scanners junto à suíte Python 3.11
+estado operacional: remediação final de scanner implementada localmente, pendente de verificação completa e CI no novo SHA

@@ -300,6 +300,47 @@ class AuditRegressionTests(unittest.TestCase):
                     path.write_text(source, encoding="utf-8")
                     self.assertIn(expected, violations(path))
 
+    def test_mock_only_scan_rejects_import_allowlist_and_dynamic_execution_bypasses(self) -> None:
+        candidates = (
+            "import importlib\n",
+            "import subprocess\n",
+            "module = 'socket'\n__import__(module)\n",
+            "getattr(__import__('asyncio'), 'open_connection')('host', 443)\n",
+            "aio = __import__('asyncio')\naio.open_connection('host', 443)\n",
+            "load_module = __import__\nload_module('socket')\n",
+            "exec('pass')\n",
+            "eval('1 + 1')\n",
+            "compile('pass', '<candidate>', 'exec')\n",
+            "run = exec\nrun('pass')\n",
+            "evaluate = eval\nevaluate('1 + 1')\n",
+            "compile_source = compile\ncompile_source('pass', '<candidate>', 'exec')\n",
+            "run = __builtins__.exec\nrun('pass')\n",
+            "evaluate = getattr(__builtins__, 'eval')\nevaluate('1 + 1')\n",
+            "compile_source = __builtins__['compile']\ncompile_source('pass', '<candidate>', 'exec')\n",
+            "builtins = __builtins__\nrun = builtins.exec\nrun('pass')\n",
+            "builtins = __builtins__\nevaluate = getattr(builtins, 'eval')\nevaluate('1 + 1')\n",
+            "def define():\n    global run\n    run = exec\ndefine()\nrun('pass')\n",
+            "run = __builtins__.__dict__['exec']\nrun('pass')\n",
+            "builtins = globals()['__builtins__']\nrun = builtins.eval\nrun('1 + 1')\n",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "candidate.py"
+            for source in candidates:
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertTrue(violations(path, require_allowed_imports=True))
+
+    def test_mock_only_scan_accepts_current_source_tree(self) -> None:
+        source_root = Path(__file__).parents[1] / "src"
+
+        findings = [
+            (path, issue)
+            for path in source_root.rglob("*.py")
+            for issue in violations(path, require_allowed_imports=True)
+        ]
+
+        self.assertEqual(findings, [])
+
     def test_mock_only_scan_allows_alias_rebound_to_non_transport(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "candidate.py"
@@ -336,6 +377,7 @@ class AuditRegressionTests(unittest.TestCase):
     def test_secret_scanner_detects_literal_expression_forms(self) -> None:
         literals = (
             "ACCESS_" + "TOKEN = 'abcd' 'efgh'",
+            "ACCESS_" + 'TOKEN = "abcd" + "efgh"',
             "ACCESS_" + "TOKEN = ('abcdefgh')",
             "ACCESS_" + 'TOKEN = b"abcdefgh"',
             "access_" + "token: str = 'abcdefgh'",
