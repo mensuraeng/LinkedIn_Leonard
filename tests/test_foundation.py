@@ -35,6 +35,7 @@ from linkedin_leonard import (
     Risk,
     Simulator,
     Snapshot,
+    Topic,
     VerificationOutcome,
 )
 
@@ -258,10 +259,10 @@ class ContractRegistryTests(unittest.TestCase):
     def test_brand_and_account_registries_isolate_each_account_policy(self) -> None:
         brands = BrandRegistry(
             {
-                "mensura": BrandProfile("mensura", frozenset({"engineering"})),
-                "mia": BrandProfile("mia", frozenset({"architecture"})),
-                "pcs": BrandProfile("pcs", frozenset({"construction"})),
-                "personal": BrandProfile("personal", frozenset({"leadership"})),
+                "mensura": BrandProfile("mensura", frozenset({Topic.ENGINEERING})),
+                "mia": BrandProfile("mia", frozenset({Topic.ARCHITECTURE})),
+                "pcs": BrandProfile("pcs", frozenset({Topic.CONSTRUCTION})),
+                "personal": BrandProfile("personal", frozenset({Topic.LEADERSHIP})),
             }
         )
         accounts = AccountRegistry(
@@ -274,9 +275,9 @@ class ContractRegistryTests(unittest.TestCase):
             brands,
         )
 
-        self.assertTrue(accounts.authorize("mensura", "engineering", AutonomyLevel.L2).allowed)
-        self.assertFalse(accounts.authorize("mia", "engineering", AutonomyLevel.L1).allowed)
-        self.assertFalse(accounts.authorize("unknown", "engineering", AutonomyLevel.L0).allowed)
+        self.assertTrue(accounts.authorize("mensura", Topic.ENGINEERING, AutonomyLevel.L2).allowed)
+        self.assertFalse(accounts.authorize("mia", Topic.ENGINEERING, AutonomyLevel.L1).allowed)
+        self.assertFalse(accounts.authorize("unknown", Topic.ENGINEERING, AutonomyLevel.L0).allowed)
 
 
 class QuotaAndCircuitBreakerTests(unittest.TestCase):

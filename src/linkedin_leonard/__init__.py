@@ -17,6 +17,7 @@ from .core import (
     CircuitBreaker,
     CircuitState,
     CortexEvent,
+    CortexEventKind,
     CortexEventLog,
     GatewayOutcome,
     GatewayResult,
@@ -32,6 +33,7 @@ from .core import (
     SimulationOutcome,
     Simulator,
     Snapshot,
+    Topic,
     VerificationOutcome,
     VerificationResult,
 )
@@ -53,6 +55,7 @@ __all__ = [
     "CircuitBreaker",
     "CircuitState",
     "CortexEvent",
+    "CortexEventKind",
     "CortexEventLog",
     "GatewayOutcome",
     "GatewayResult",
@@ -68,6 +71,7 @@ __all__ = [
     "SimulationOutcome",
     "Simulator",
     "Snapshot",
+    "Topic",
     "VerificationOutcome",
     "VerificationResult",
 ]
