@@ -322,6 +322,8 @@ class AuditRegressionTests(unittest.TestCase):
             "def define():\n    global run\n    run = exec\ndefine()\nrun('pass')\n",
             "run = __builtins__.__dict__['exec']\nrun('pass')\n",
             "builtins = globals()['__builtins__']\nrun = builtins.eval\nrun('1 + 1')\n",
+            "@__import__('socket')\ndef decorated():\n    pass\n",
+            "def defaulted(loader=__import__('socket')):\n    pass\n",
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "candidate.py"
