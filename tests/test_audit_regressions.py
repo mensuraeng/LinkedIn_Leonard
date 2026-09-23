@@ -118,6 +118,14 @@ class AuditRegressionTests(unittest.TestCase):
         self.assertEqual(outcome.status, "account_registry_required")
         self.assertEqual(gateway.read_count, 0)
 
+    def test_write_without_account_registry_is_fail_closed(self) -> None:
+        mission = Mission(WRITE, ACCOUNT, {"text": "draft"})
+        outcome = Simulator(policy=policy(), approval_gate=ApprovalGate(now=lambda: NOW),
+                            gateway=MockLinkedInGateway(), audit=AuditLog(today=lambda: NOW.date())).run(
+                                mission, approval_for(mission)
+                            )
+        self.assertEqual(outcome.status, "account_registry_required")
+
     def test_account_registry_denies_untyped_topic_values(self) -> None:
         decision = account_registry().authorize(ACCOUNT, "engineering", AutonomyLevel.L0)  # type: ignore[arg-type]
 
@@ -126,17 +134,34 @@ class AuditRegressionTests(unittest.TestCase):
 
     def test_critical_quota_denies_write_but_allows_l0_read(self) -> None:
         quota = QuotaBudget("mock-posts", daily_limit=100, used=90)
-        write = Mission(WRITE, ACCOUNT, {"text": "draft"}, autonomy=AutonomyLevel.L0)
-        read = Mission(READ, ACCOUNT, {"format": "summary"}, autonomy=AutonomyLevel.L0)
+        write = Mission(WRITE, ACCOUNT, {"text": "draft"}, autonomy=AutonomyLevel.L0, topic=Topic.ENGINEERING)
+        read = Mission(READ, ACCOUNT, {"format": "summary"}, autonomy=AutonomyLevel.L0, topic=Topic.ENGINEERING)
         gateway = MockLinkedInGateway()
         simulator = Simulator(
             policy=policy(), approval_gate=ApprovalGate(now=lambda: NOW), gateway=gateway,
-            audit=AuditLog(today=lambda: NOW.date()), quota=quota,
+            audit=AuditLog(today=lambda: NOW.date()), account_registry=account_registry(), quota=quota,
         )
 
         self.assertEqual(simulator.run(write, approval_for(write)).status, "quota_denied")
         self.assertTrue(simulator.run(read).confirmed)
         self.assertEqual((gateway.write_count, gateway.read_count), (0, 1))
+
+    def test_quota_consumption_blocks_the_write_after_the_daily_limit(self) -> None:
+        quota = QuotaBudget("mock-posts", daily_limit=2)
+        gateway = MockLinkedInGateway()
+        simulator = Simulator(
+            policy=policy(), approval_gate=ApprovalGate(now=lambda: NOW), gateway=gateway,
+            audit=AuditLog(today=lambda: NOW.date()), account_registry=account_registry(), quota=quota,
+        )
+        missions = tuple(
+            Mission(WRITE, ACCOUNT, {"text": f"draft-{index}"}, topic=Topic.ENGINEERING)
+            for index in range(3)
+        )
+
+        outcomes = tuple(simulator.run(mission, approval_for(mission)) for mission in missions)
+
+        self.assertEqual([outcome.status for outcome in outcomes], ["confirmed", "confirmed", "quota_denied"])
+        self.assertEqual(gateway.write_count, 2)
 
     def test_cortex_events_allow_only_contract_kind_and_trace(self) -> None:
         events = CortexEventLog()
@@ -209,6 +234,7 @@ class AuditRegressionTests(unittest.TestCase):
     def test_secret_scanner_detects_prefixed_credential_assignment(self) -> None:
         self.assertIsNotNone(ASSIGNMENT.search("LINKEDIN_" + "ACCESS" + '_TOKEN = "abcdefgh"'))
         self.assertIsNotNone(ASSIGNMENT.search("LINKEDIN_" + "CLIENT" + '_SECRET = "abcdefgh"'))
+        self.assertIsNotNone(ASSIGNMENT.search('{"access_' + 'token": "abcdefgh"}'))
 
     def test_mock_only_scan_rejects_common_http_clients(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

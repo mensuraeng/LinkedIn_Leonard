@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from enum import Enum
 import hashlib
@@ -229,6 +229,10 @@ class QuotaBudget:
             QuotaState.CONSERVE: AutonomyLevel.L1,
             QuotaState.CRITICAL: AutonomyLevel.L0,
         }[self.state]
+
+    def consume(self) -> "QuotaBudget":
+        """Return the next immutable budget after one gateway operation."""
+        return replace(self, used=self.used + 1)
 
 
 class CircuitState(str, Enum):
@@ -584,7 +588,12 @@ class Simulator:
                 self._audit.record("agent_denied", status=agent_decision.reason, trace_id=trace_id,
                                    action=mission.action, account=mission.account)
                 return SimulationOutcome(trace_id, "agent_denied", False)
-        if mission.topic is not None and self._account_registry is None:
+        decision = self._policy.decide(mission.action, mission.account)
+        if not decision.allowed:
+            self._audit.record("policy_denied", status=decision.reason, trace_id=trace_id,
+                               action=mission.action, account=mission.account)
+            return SimulationOutcome(trace_id, "policy_denied", False)
+        if self._account_registry is None and (mission.topic is not None or decision.is_write):
             self._audit.record("account_denied", status="account_registry_required", trace_id=trace_id,
                                action=mission.action, account=mission.account)
             return SimulationOutcome(trace_id, "account_registry_required", False)
@@ -600,11 +609,6 @@ class Simulator:
                 self._audit.record("account_denied", status=account_decision.reason, trace_id=trace_id,
                                    action=mission.action, account=mission.account)
                 return SimulationOutcome(trace_id, "account_denied", False)
-        decision = self._policy.decide(mission.action, mission.account)
-        if not decision.allowed:
-            self._audit.record("policy_denied", status=decision.reason, trace_id=trace_id,
-                               action=mission.action, account=mission.account)
-            return SimulationOutcome(trace_id, "policy_denied", False)
         if has_agent_identity and decision.is_write:
             self._audit.record("agent_publish_denied", status="orchestrator_only", trace_id=trace_id,
                                action=mission.action, account=mission.account)
@@ -648,6 +652,8 @@ class Simulator:
             if decision.is_write
             else gateway.read(mission.action, mission.account, mission.payload)
         )
+        if self._quota is not None:
+            self._quota = self._quota.consume()
         self._audit.record(
             "gateway_result",
             payload=mission.payload,

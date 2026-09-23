@@ -32,8 +32,8 @@ Mission → AgentRegistry → AccountRegistry → BrandRegistry → Policy → A
 - `MockVerificationBoundary` é uma fronteira distinta, também apenas em memória e mock-only. Ela confirma o receipt vinculado ao snapshot ou devolve `not_found`, `mismatch` ou `timeout`.
 - `Simulator` confirma uma missão somente depois de resultado positivo do gateway e de confirmação positiva da verificação do receipt/snapshot.
 - `AgentRegistry` aplica capability, conta autorizada, teto de autonomia, orçamento e timeout; ausência de agente, capability ou conta é negada. Um subagente não pode executar write/publicação.
-- `BrandRegistry` e `AccountRegistry` governam o caminho crítico por tópico tipado e isolam políticas mínimas de MENSURA, MIA, PCS e perfil pessoal. Missões com identidade de agente sem `AgentRegistry`, ou com tópico incompatível, são negadas.
-- `QuotaBudget` degrada autonomia em `NORMAL`, `WATCH`, `CONSERVE` e `CRITICAL`; em `CRITICAL` qualquer write é negado, inclusive L0. Reads continuam sujeitos ao teto de autonomia. `CircuitBreaker` abre para writes após a quantidade configurada de falhas mock `401`, `403`, `429` ou `timeout`.
+- `BrandRegistry` e `AccountRegistry` governam o caminho crítico por tópico tipado e isolam políticas mínimas de MENSURA, MIA, PCS e perfil pessoal. Writes exigem `AccountRegistry` e `Topic`; tópico ausente ou incompatível é negado. Missões com identidade de agente sem `AgentRegistry` também são negadas.
+- `QuotaBudget` degrada autonomia em `NORMAL`, `WATCH`, `CONSERVE` e `CRITICAL`; em `CRITICAL` qualquer write é negado, inclusive L0. Cada operação mock permitida consome uma unidade do budget; reads continuam sujeitos ao teto de autonomia. `CircuitBreaker` abre para writes após a quantidade configurada de falhas mock `401`, `403`, `429` ou `timeout`.
 - `CortexEventLog` aceita somente tipos allowlisted e trace IDs contratuais, mantém hash de payload e status sanitizado em memória, sem integração Córtex.
 - Idempotência fecha somente em sucesso ou falha terminal mock `401`/`403`; `429` e `timeout` permanecem elegíveis para retry controlado sem duplicar sucesso.
 

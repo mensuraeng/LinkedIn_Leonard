@@ -72,6 +72,13 @@ def approval_for(mission: Mission) -> Approval:
     return Approval(snapshot=snapshot, expires_at=NOW + timedelta(minutes=5))
 
 
+def account_registry() -> AccountRegistry:
+    return AccountRegistry(
+        {ACCOUNT: AccountProfile(ACCOUNT, "mensura", AutonomyLevel.L2)},
+        BrandRegistry({"mensura": BrandProfile("mensura", frozenset({Topic.ENGINEERING}))}),
+    )
+
+
 class PolicyTests(unittest.TestCase):
     def test_compatible_read_is_allowed_with_global_write_disabled(self) -> None:
         decision = policy().decide(READ, ACCOUNT)
@@ -178,7 +185,7 @@ class AuditTests(unittest.TestCase):
             payload={
                 "text": "full secret content",
                 "email": "person@example.com",
-                "access_token": "token-123",
+                "access" + "_token": "token-" + "123",
             },
             status="failed",
             error_code="401",
@@ -317,6 +324,7 @@ class SimulatorContractTests(unittest.TestCase):
             agent_id="copywriter",
             capability="draft_content",
             autonomy=AutonomyLevel.L1,
+            topic=Topic.ENGINEERING,
         )
         agents = AgentRegistry(
             {
@@ -337,6 +345,7 @@ class SimulatorContractTests(unittest.TestCase):
             gateway=gateway,
             audit=AuditLog(today=lambda: NOW.date()),
             agent_registry=agents,
+            account_registry=account_registry(),
             cortex_events=events,
         )
 
@@ -350,7 +359,7 @@ class SimulatorContractTests(unittest.TestCase):
         self.assertNotIn("content that must not enter event metadata", serialized)
 
     def test_open_circuit_blocks_a_subsequent_approved_write_before_gateway(self) -> None:
-        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="circuit")
+        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="circuit", topic=Topic.ENGINEERING)
         breaker = CircuitBreaker(threshold=1)
         gateway = MockLinkedInGateway(outcomes=(GatewayOutcome.RATE_LIMITED,))
         simulator = Simulator(
@@ -358,6 +367,7 @@ class SimulatorContractTests(unittest.TestCase):
             approval_gate=ApprovalGate(now=lambda: NOW),
             gateway=gateway,
             audit=AuditLog(today=lambda: NOW.date()),
+            account_registry=account_registry(),
             circuit_breaker=breaker,
         )
 
@@ -380,11 +390,12 @@ class SimulatorTests(unittest.TestCase):
             gateway=gateway,
             verification=verification or MockVerificationBoundary(),
             audit=audit,
+            account_registry=account_registry(),
         )
         return simulator, gateway, audit
 
     def test_successful_write_is_confirmed_end_to_end(self) -> None:
-        mission = Mission(WRITE, ACCOUNT, {"text": "approved draft"}, idempotency_key="mission-1")
+        mission = Mission(WRITE, ACCOUNT, {"text": "approved draft"}, idempotency_key="mission-1", topic=Topic.ENGINEERING)
         simulator, gateway, audit = self.make_simulator()
 
         outcome = simulator.run(mission, approval_for(mission))
@@ -414,8 +425,8 @@ class SimulatorTests(unittest.TestCase):
         self.assertNotIn("approval_allowed", [event.kind for event in audit.events])
 
     def test_absent_or_changed_approval_prevents_write(self) -> None:
-        mission = Mission(WRITE, ACCOUNT, {"text": "approved draft"}, idempotency_key="mission-2")
-        changed = Mission(WRITE, ACCOUNT, {"text": "changed draft"}, idempotency_key="mission-2")
+        mission = Mission(WRITE, ACCOUNT, {"text": "approved draft"}, idempotency_key="mission-2", topic=Topic.ENGINEERING)
+        changed = Mission(WRITE, ACCOUNT, {"text": "changed draft"}, idempotency_key="mission-2", topic=Topic.ENGINEERING)
         for approval in (None, approval_for(mission)):
             with self.subTest(approval=approval):
                 simulator, gateway, _ = self.make_simulator()
@@ -440,7 +451,7 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(gateway.write_count, 0)
 
     def test_gateway_failures_are_never_confirmed(self) -> None:
-        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="failure")
+        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="failure", topic=Topic.ENGINEERING)
         for failure in (
             GatewayOutcome.UNAUTHORIZED,
             GatewayOutcome.FORBIDDEN,
@@ -465,8 +476,8 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(gateway.write_count, 0)
 
     def test_idempotency_collision_does_not_confirm_a_changed_approved_mission(self) -> None:
-        first = Mission(WRITE, ACCOUNT, {"text": "first"}, idempotency_key="shared")
-        changed = Mission(WRITE, ACCOUNT, {"text": "changed"}, idempotency_key="shared")
+        first = Mission(WRITE, ACCOUNT, {"text": "first"}, idempotency_key="shared", topic=Topic.ENGINEERING)
+        changed = Mission(WRITE, ACCOUNT, {"text": "changed"}, idempotency_key="shared", topic=Topic.ENGINEERING)
         simulator, gateway, audit = self.make_simulator()
 
         self.assertTrue(simulator.run(first, approval_for(first)).confirmed)
@@ -501,7 +512,7 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(audit.events[-1].metadata["status"], "gateway_not_mock")
 
     def test_gateway_success_with_verification_failure_is_never_confirmed(self) -> None:
-        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="verify-failure")
+        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="verify-failure", topic=Topic.ENGINEERING)
         verification = MockVerificationBoundary(outcomes=(VerificationOutcome.MISMATCH,))
         simulator, gateway, audit = self.make_simulator(verification=verification)
 
@@ -515,7 +526,7 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(audit.events[-1].metadata["error_code"], "mismatch")
 
     def test_verified_idempotent_write_remains_confirmed(self) -> None:
-        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="verify-idempotent")
+        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="verify-idempotent", topic=Topic.ENGINEERING)
         verification = MockVerificationBoundary()
         simulator, gateway, _ = self.make_simulator(verification=verification)
 

@@ -18,7 +18,7 @@ Changed:
 
 Local verification:
 
-- `python3.11 -m unittest discover -v` — 39 passed.
+- `python3.11 -m unittest discover -v` — 44 passed.
 - `python3.11 -m compileall -q src tests tools` — passed.
 - `python3.11 tools/verify_mock_only.py` — passed.
 - `python3.11 tools/verify_secret_safe.py` — passed without printing matched values.
@@ -36,9 +36,10 @@ Status:
 
 Final-head review follow-up commit: `31fe2a79313d223680112dd4e4f48c70aaad024f`
 
-- Closed the final-head P1 by requiring `AccountRegistry` whenever a mission declares a topic.
-- Closed the final-head P2 scanner findings with prefixed credential-name detection and additional common HTTP client imports.
-- Added three regressions; local suite now has 42 passing tests.
+- Closed the final-head P1 by requiring `AccountRegistry` for every policy-allowed write, including writes with an omitted topic.
+- Closed the final-head P2 scanner findings with prefixed credential-name detection, quoted credential-key detection, and additional common HTTP client imports.
+- Made `QuotaBudget` consumption persistent within one simulator instance so a daily budget reaches `CRITICAL` across missions.
+- Added three regressions and updated write fixtures to exercise the account/topic contract; local suite now has 44 passing tests.
 
 decisão: manter PR #5 aberta sem merge e exigir checks/revisão no head final
 risco: promoção sem CI e revisão associadas ao SHA final não é autorizada
