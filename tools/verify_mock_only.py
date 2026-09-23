@@ -17,22 +17,32 @@ def violations(path: Path) -> list[str]:
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
     imported: set[str] = set()
+    module_aliases: dict[str, str] = {}
+    imported_calls: dict[str, tuple[str, str]] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            imported.update(alias.name.split(".")[0] for alias in node.names)
+            for alias in node.names:
+                canonical = alias.name.split(".")[0]
+                imported.add(canonical)
+                module_aliases[alias.asname or canonical] = canonical
         elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module.split(".")[0])
+            canonical = node.module.split(".")[0]
+            imported.add(canonical)
+            for alias in node.names:
+                if (canonical, alias.name) in FORBIDDEN_CALLS:
+                    imported_calls[alias.asname or alias.name] = (canonical, alias.name)
     findings: list[str] = []
     blocked = imported.intersection(FORBIDDEN_IMPORTS)
     if blocked:
         findings.append(f"forbidden transport import(s): {', '.join(sorted(blocked))}")
-    calls = {
-        (node.func.value.id, node.func.attr)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-    }
+    calls: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+            calls.add((module_aliases.get(node.func.value.id, node.func.value.id), node.func.attr))
+        elif isinstance(node.func, ast.Name) and node.func.id in imported_calls:
+            calls.add(imported_calls[node.func.id])
     blocked_calls = calls.intersection(FORBIDDEN_CALLS)
     if blocked_calls:
         rendered = ", ".join(".".join(call) for call in sorted(blocked_calls))

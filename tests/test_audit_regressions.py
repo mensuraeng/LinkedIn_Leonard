@@ -268,10 +268,24 @@ class AuditRegressionTests(unittest.TestCase):
 
             self.assertIn("forbidden transport call(s): asyncio.open_connection", violations(path))
 
+    def test_mock_only_scan_resolves_asyncio_transport_import_aliases(self) -> None:
+        candidates = (
+            "import asyncio as aio\naio.open_connection('host', 443, ssl=True)\n",
+            "from asyncio import open_connection\nopen_connection('host', 443, ssl=True)\n",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "candidate.py"
+            for source in candidates:
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertIn("forbidden transport call(s): asyncio.open_connection", violations(path))
+
     def test_secret_scanner_allows_managed_references_but_not_literal_values(self) -> None:
         for reference in (
             "LINKEDIN_ACCESS_" + "TOKEN=${LINKEDIN_ACCESS_TOKEN}",
             "client_" + "secret=secret://linkedin/prod",
+            'LINKEDIN_ACCESS_' + 'TOKEN="${LINKEDIN_ACCESS_TOKEN}"',
+            "client_" + "secret='secret://linkedin/prod'",
         ):
             with self.subTest(reference=reference):
                 self.assertIsNone(ASSIGNMENT.search(reference))
