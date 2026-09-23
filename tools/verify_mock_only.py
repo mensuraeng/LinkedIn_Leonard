@@ -31,27 +31,35 @@ def violations(path: Path) -> list[str]:
             for alias in node.names:
                 if (canonical, alias.name) in FORBIDDEN_CALLS:
                     imported_calls[alias.asname or alias.name] = (canonical, alias.name)
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
-            continue
-        target = node.targets[0].id
-        value = node.value
-        if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name):
-            call = (module_aliases.get(value.value.id, value.value.id), value.attr)
-        elif (
-            isinstance(value, ast.Call)
-            and isinstance(value.func, ast.Name)
-            and value.func.id == "getattr"
-            and len(value.args) >= 2
-            and isinstance(value.args[0], ast.Name)
-            and isinstance(value.args[1], ast.Constant)
-            and isinstance(value.args[1].value, str)
-        ):
-            call = (module_aliases.get(value.args[0].id, value.args[0].id), value.args[1].value)
-        else:
-            continue
-        if call in FORBIDDEN_CALLS:
-            imported_calls[target] = call
+    assignments = tuple(node for node in ast.walk(tree) if isinstance(node, ast.Assign))
+    while True:
+        additions: dict[str, tuple[str, str]] = {}
+        for node in assignments:
+            if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+                continue
+            target = node.targets[0].id
+            value = node.value
+            if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name):
+                call = (module_aliases.get(value.value.id, value.value.id), value.attr)
+            elif (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Name)
+                and value.func.id == "getattr"
+                and len(value.args) >= 2
+                and isinstance(value.args[0], ast.Name)
+                and isinstance(value.args[1], ast.Constant)
+                and isinstance(value.args[1].value, str)
+            ):
+                call = (module_aliases.get(value.args[0].id, value.args[0].id), value.args[1].value)
+            elif isinstance(value, ast.Name) and value.id in imported_calls:
+                call = imported_calls[value.id]
+            else:
+                continue
+            if call in FORBIDDEN_CALLS and target not in imported_calls:
+                additions[target] = call
+        if not additions:
+            break
+        imported_calls.update(additions)
     findings: list[str] = []
     blocked = imported.intersection(FORBIDDEN_IMPORTS)
     if blocked:
@@ -64,6 +72,16 @@ def violations(path: Path) -> list[str]:
             calls.add((module_aliases.get(node.func.value.id, node.func.value.id), node.func.attr))
         elif isinstance(node.func, ast.Name) and node.func.id in imported_calls:
             calls.add(imported_calls[node.func.id])
+        elif (
+            isinstance(node.func, ast.Call)
+            and isinstance(node.func.func, ast.Name)
+            and node.func.func.id == "getattr"
+            and len(node.func.args) >= 2
+            and isinstance(node.func.args[0], ast.Name)
+            and isinstance(node.func.args[1], ast.Constant)
+            and isinstance(node.func.args[1].value, str)
+        ):
+            calls.add((module_aliases.get(node.func.args[0].id, node.func.args[0].id), node.func.args[1].value))
     blocked_calls = calls.intersection(FORBIDDEN_CALLS)
     if blocked_calls:
         rendered = ", ".join(".".join(call) for call in sorted(blocked_calls))
