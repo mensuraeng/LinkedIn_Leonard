@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 ASSIGNMENT = re.compile(
-    r"(?i)(?<![a-z0-9_])['\"]?(?:[a-z0-9]+_)*(?:api[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|password)['\"]?\s*[:=]\s*(?!(?:['\"])?(?:\$\{[^}]+\}|secret://[^\s'\"]+)(?:['\"])?(?=\s|$))(?:['\"][^'\"]{8,}['\"]|[^\s#'\"]{8,})"
+    r"(?i)(?<![a-z0-9_])['\"]?(?:[a-z0-9]+_)*(?:api[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|password)['\"]?\s*[:=]\s*(?!(?:['\"])?(?:\$\{[^}]+\}|secret://[^\s'\",)\]}#]+)(?:['\"])?(?=\s|$|[, )\]}#]))(?:['\"][^'\"]{8,}['\"]|[^\s#'\"]{8,})"
 )
 
 

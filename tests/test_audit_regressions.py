@@ -272,6 +272,8 @@ class AuditRegressionTests(unittest.TestCase):
         candidates = (
             "import asyncio as aio\naio.open_connection('host', 443, ssl=True)\n",
             "from asyncio import open_connection\nopen_connection('host', 443, ssl=True)\n",
+            "import asyncio\nconnect = asyncio.open_connection\nconnect('host', 443, ssl=True)\n",
+            "import asyncio\nconnect = getattr(asyncio, 'open_connection')\nconnect('host', 443, ssl=True)\n",
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "candidate.py"
@@ -286,6 +288,8 @@ class AuditRegressionTests(unittest.TestCase):
             "client_" + "secret=secret://linkedin/prod",
             'LINKEDIN_ACCESS_' + 'TOKEN="${LINKEDIN_ACCESS_TOKEN}"',
             "client_" + "secret='secret://linkedin/prod'",
+            'LINKEDIN_ACCESS_' + 'TOKEN="${LINKEDIN_ACCESS_TOKEN}",',
+            "client_" + "secret='secret://linkedin/prod',",
         ):
             with self.subTest(reference=reference):
                 self.assertIsNone(ASSIGNMENT.search(reference))
