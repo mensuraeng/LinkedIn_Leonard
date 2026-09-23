@@ -53,6 +53,12 @@ Third final-head review follow-up:
 - Kept the secret-safe scanner fail-closed for literal values while permitting only managed environment (`${...}`) and secret-manager (`secret://...`) references.
 - Added regressions for both cases; local suite now has 48 passing tests.
 
+Scanner bypass remediation follow-up:
+
+- Changed the mock-only scanner to process bindings in source order, so it rejects dynamic forbidden imports, dynamic `asyncio` transport access, static-string `getattr`, annotated aliases, tuple aliases and `__dict__` transport access while permitting a later lambda rebinding or parameter shadowing.
+- Extended the secret-safe scanner for adjacent literals, parenthesized literals, byte literals and annotated assignments; managed references remain accepted when followed by a period delimiter.
+- Added adversarial regression coverage; Python 3.11 local suite now has 52 passing tests, and compileall, diff-check and both scanners passed.
+
 decisão: manter PR #5 aberta sem merge e exigir checks/revisão no head final
 risco: promoção sem CI e revisão associadas ao SHA final não é autorizada
 procedimento: validar Actions, solicitar revisão Codex e revisão independente antes de decidir promotion

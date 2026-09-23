@@ -284,6 +284,39 @@ class AuditRegressionTests(unittest.TestCase):
                     path.write_text(source, encoding="utf-8")
                     self.assertIn("forbidden transport call(s): asyncio.open_connection", violations(path))
 
+    def test_mock_only_scan_rejects_dynamic_import_and_obfuscated_aliases(self) -> None:
+        candidates = (
+            ("__import__('socket')\n", "forbidden transport import(s): socket"),
+            ("__import__('asyncio').open_connection('host', 443)\n", "forbidden transport call(s): asyncio.open_connection"),
+            ("import asyncio\ngetattr(asyncio, 'open_' + 'connection')('host', 443)\n", "forbidden transport call(s): asyncio.open_connection"),
+            ("import asyncio\nconnect: object = asyncio.open_connection\nconnect('host', 443)\n", "forbidden transport call(s): asyncio.open_connection"),
+            ("import asyncio\nconnect, unused = asyncio.open_connection, None\nconnect('host', 443)\n", "forbidden transport call(s): asyncio.open_connection"),
+            ("import asyncio\nasyncio.__dict__['open_connection']('host', 443)\n", "forbidden transport call(s): asyncio.open_connection"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "candidate.py"
+            for source, expected in candidates:
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertIn(expected, violations(path))
+
+    def test_mock_only_scan_allows_alias_rebound_to_non_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "candidate.py"
+            path.write_text(
+                "import asyncio\nconnect = asyncio.open_connection\nconnect = lambda *args: None\nconnect('host', 443)\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(violations(path), [])
+
+            path.write_text(
+                "import asyncio\nconnect = asyncio.open_connection\ndef worker(connect):\n    connect('host', 443)\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(violations(path), [])
+
     def test_secret_scanner_allows_managed_references_but_not_literal_values(self) -> None:
         for reference in (
             "LINKEDIN_ACCESS_" + "TOKEN=${LINKEDIN_ACCESS_TOKEN}",
@@ -293,11 +326,24 @@ class AuditRegressionTests(unittest.TestCase):
             'LINKEDIN_ACCESS_' + 'TOKEN="${LINKEDIN_ACCESS_TOKEN}",',
             "client_" + "secret='secret://linkedin/prod',",
             'LINKEDIN_ACCESS_' + 'TOKEN="${LINKEDIN_ACCESS_TOKEN}";',
+            'LINKEDIN_ACCESS_' + 'TOKEN="${LINKEDIN_ACCESS_TOKEN}".',
         ):
             with self.subTest(reference=reference):
                 self.assertIsNone(ASSIGNMENT.search(reference))
         self.assertIsNotNone(ASSIGNMENT.search("LINKEDIN_ACCESS_" + "TOKEN=abcdefgh"))
         self.assertIsNotNone(ASSIGNMENT.search("REFRESH_" + 'TOKEN=f"abcdefgh"'))
+
+    def test_secret_scanner_detects_literal_expression_forms(self) -> None:
+        literals = (
+            "ACCESS_" + "TOKEN = 'abcd' 'efgh'",
+            "ACCESS_" + "TOKEN = ('abcdefgh')",
+            "ACCESS_" + 'TOKEN = b"abcdefgh"',
+            "access_" + "token: str = 'abcdefgh'",
+        )
+
+        for literal in literals:
+            with self.subTest(literal=literal):
+                self.assertIsNotNone(ASSIGNMENT.search(literal))
 
 
 if __name__ == "__main__":
