@@ -3,29 +3,36 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 ASSIGNMENT = re.compile(
-    r"(?i)(?<![a-z0-9_])['\"]?(?:[a-z0-9]+_)*(?:api[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|password)['\"]?\s*[:=]\s*['\"]([^'\"]{8,})['\"]"
+    r"(?i)(?<![a-z0-9_])['\"]?(?:[a-z0-9]+_)*(?:api[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|password)['\"]?\s*[:=]\s*(?:['\"][^'\"]{8,}['\"]|[^\s#'\"]{8,})"
 )
-SKIP_PARTS = frozenset({".git", "__pycache__"})
-SCAN_ROOTS = (Path("src"), Path("tests"), Path("tools"), Path(".github"))
+
+
+def tracked_files() -> tuple[Path, ...]:
+    """Return every Git-tracked path without traversing ignored workspace state."""
+    result = subprocess.run(
+        ("git", "ls-files", "-z"),
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    return tuple(Path(name.decode("utf-8")) for name in result.stdout.split(b"\0") if name)
 
 
 def main() -> int:
     violations: list[Path] = []
-    for root in SCAN_ROOTS:
-        if not root.exists():
+    for path in tracked_files():
+        if not path.is_file():
             continue
-        for path in root.rglob("*"):
-            if not path.is_file() or any(part in SKIP_PARTS for part in path.parts):
-                continue
-            try:
-                text = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                continue
-            if ASSIGNMENT.search(text):
-                violations.append(path)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if ASSIGNMENT.search(text):
+            violations.append(path)
     if violations:
         for path in violations:
             print(f"secret-safe violation: {path}")

@@ -598,17 +598,18 @@ class Simulator:
                                action=mission.action, account=mission.account)
             return SimulationOutcome(trace_id, "account_registry_required", False)
         if self._account_registry is not None:
-            if mission.topic is None:
+            if mission.topic is None and decision.is_write:
                 self._audit.record("account_denied", status="topic_required", trace_id=trace_id,
                                    action=mission.action, account=mission.account)
                 return SimulationOutcome(trace_id, "account_denied", False)
-            account_decision = self._account_registry.authorize(
-                mission.account, mission.topic, mission.autonomy
-            )
-            if not account_decision.allowed:
-                self._audit.record("account_denied", status=account_decision.reason, trace_id=trace_id,
-                                   action=mission.action, account=mission.account)
-                return SimulationOutcome(trace_id, "account_denied", False)
+            if mission.topic is not None:
+                account_decision = self._account_registry.authorize(
+                    mission.account, mission.topic, mission.autonomy
+                )
+                if not account_decision.allowed:
+                    self._audit.record("account_denied", status=account_decision.reason, trace_id=trace_id,
+                                       action=mission.action, account=mission.account)
+                    return SimulationOutcome(trace_id, "account_denied", False)
         if has_agent_identity and decision.is_write:
             self._audit.record("agent_publish_denied", status="orchestrator_only", trace_id=trace_id,
                                action=mission.action, account=mission.account)

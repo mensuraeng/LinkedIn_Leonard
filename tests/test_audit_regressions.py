@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from tools.verify_mock_only import violations
-from tools.verify_secret_safe import ASSIGNMENT
+from tools.verify_secret_safe import ASSIGNMENT, tracked_files
 
 from linkedin_leonard import (
     AccountPolicy,
@@ -126,6 +126,17 @@ class AuditRegressionTests(unittest.TestCase):
                             )
         self.assertEqual(outcome.status, "account_registry_required")
 
+    def test_topicless_read_remains_allowed_when_account_registry_is_configured(self) -> None:
+        mission = Mission(READ, ACCOUNT, {"format": "summary"})
+        gateway = MockLinkedInGateway()
+        outcome = Simulator(
+            policy=policy(), approval_gate=ApprovalGate(now=lambda: NOW), gateway=gateway,
+            audit=AuditLog(today=lambda: NOW.date()), account_registry=account_registry(),
+        ).run(mission)
+
+        self.assertTrue(outcome.confirmed)
+        self.assertEqual(gateway.read_count, 1)
+
     def test_account_registry_denies_untyped_topic_values(self) -> None:
         decision = account_registry().authorize(ACCOUNT, "engineering", AutonomyLevel.L0)  # type: ignore[arg-type]
 
@@ -235,6 +246,10 @@ class AuditRegressionTests(unittest.TestCase):
         self.assertIsNotNone(ASSIGNMENT.search("LINKEDIN_" + "ACCESS" + '_TOKEN = "abcdefgh"'))
         self.assertIsNotNone(ASSIGNMENT.search("LINKEDIN_" + "CLIENT" + '_SECRET = "abcdefgh"'))
         self.assertIsNotNone(ASSIGNMENT.search('{"access_' + 'token": "abcdefgh"}'))
+        self.assertIsNotNone(ASSIGNMENT.search("LINKEDIN_" + "ACCESS_" + "TOKEN: abcdefgh"))
+
+    def test_secret_scanner_uses_all_tracked_repository_files(self) -> None:
+        self.assertIn(Path("README.md"), tracked_files())
 
     def test_mock_only_scan_rejects_common_http_clients(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
