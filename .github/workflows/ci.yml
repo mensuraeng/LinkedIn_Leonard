@@ -1,0 +1,32 @@
+name: local-only-contracts
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - feat/simulator-contract-expansion
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Unit tests
+        run: python -m unittest discover -v
+      - name: Compile source and tests
+        run: python -m compileall -q src tests tools
+      - name: Whitespace integrity
+        run: git diff --check origin/main...HEAD
+      - name: Mock-only AST and URL boundary
+        run: python tools/verify_mock_only.py
+      - name: Secret-safe source scan
+        run: python tools/verify_secret_safe.py

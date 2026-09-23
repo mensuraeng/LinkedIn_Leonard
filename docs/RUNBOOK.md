@@ -204,9 +204,14 @@ Somente após testes satisfatórios o adapter real pode substituir o mock.
 
 - `GLOBAL_WRITE_ENABLED` permanece `false`; os testes de write usam apenas configurações explícitas e gateway em memória.
 - Todo subagente precisa de contrato no `AgentRegistry`: capability, conta permitida, autonomia máxima, orçamento e timeout. Ausência de qualquer autorização falha fechada; subagente não publica.
-- `BrandRegistry` e `AccountRegistry` mantêm isolamento de política entre MENSURA, MIA, PCS e perfil pessoal.
-- `QuotaBudget` rebaixa autonomia: `<60% NORMAL`, `60–<75% WATCH`, `75–<90% CONSERVE`, `>=90% CRITICAL`. `CircuitBreaker` bloqueia writes após o limiar configurado de `401`, `403`, `429` ou `timeout` mock.
-- Eventos candidatos ao Córtex são estritamente locais e sanitizados: hash do payload e estado, nunca conteúdo, credencial ou PII. Não há chamada Córtex nesta wave.
+- `BrandRegistry` e `AccountRegistry` governam a execução por tópico tipado e mantêm isolamento de política entre MENSURA, MIA, PCS e perfil pessoal. Missão com tópico ausente ou incompatível é negada antes da política.
+- `QuotaBudget` rebaixa autonomia: `<60% NORMAL`, `60–<75% WATCH`, `75–<90% CONSERVE`, `>=90% CRITICAL`. Em `CRITICAL`, writes são sempre negados, inclusive L0; reads continuam sujeitos ao teto de autonomia. `CircuitBreaker` bloqueia writes após o limiar configurado de `401`, `403`, `429` ou `timeout` mock.
+- Eventos candidatos ao Córtex são estritamente locais e sanitizados: somente kind allowlisted, trace ID contratual, hash do payload e estado sanitizado; nunca conteúdo, credencial ou PII. Não há chamada Córtex nesta wave.
+- Idempotência: sucesso e falhas mock terminais `401`/`403` fecham a chave; `429` e `timeout` são transitórios e permitem retry controlado.
+
+### Estado de promoção
+
+Use sempre `IMPLEMENTED → REVIEWED → VALIDATED → PROMOTED`. `MERGED` é atributo Git, não conclusão operacional. Waves 00–03 estão `MERGED_WITH_FINDINGS` até a revisão do head final; Wave 04 permanece sem autorização de merge ou promotion.
 
 ## 11. Segurança
 
