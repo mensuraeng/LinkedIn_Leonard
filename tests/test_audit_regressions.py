@@ -258,6 +258,25 @@ class AuditRegressionTests(unittest.TestCase):
 
             self.assertIn("forbidden transport import(s): httpx", violations(path))
 
+    def test_mock_only_scan_rejects_direct_asyncio_tls_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "candidate.py"
+            path.write_text(
+                "import asyncio\nasyncio.open_connection('host', 443, ssl=True)\n",
+                encoding="utf-8",
+            )
+
+            self.assertIn("forbidden transport call(s): asyncio.open_connection", violations(path))
+
+    def test_secret_scanner_allows_managed_references_but_not_literal_values(self) -> None:
+        for reference in (
+            "LINKEDIN_ACCESS_" + "TOKEN=${LINKEDIN_ACCESS_TOKEN}",
+            "client_" + "secret=secret://linkedin/prod",
+        ):
+            with self.subTest(reference=reference):
+                self.assertIsNone(ASSIGNMENT.search(reference))
+        self.assertIsNotNone(ASSIGNMENT.search("LINKEDIN_ACCESS_" + "TOKEN=abcdefgh"))
+
 
 if __name__ == "__main__":
     unittest.main()

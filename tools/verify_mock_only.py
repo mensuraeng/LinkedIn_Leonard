@@ -9,6 +9,7 @@ FORBIDDEN_IMPORTS = frozenset({
     "aiohttp", "grpc", "http", "httpx", "oauthlib", "requests", "selenium", "socket",
     "urllib", "urllib3", "websockets",
 })
+FORBIDDEN_CALLS = frozenset({("asyncio", "open_connection")})
 SOURCE_ROOT = Path("src")
 
 
@@ -25,6 +26,17 @@ def violations(path: Path) -> list[str]:
     blocked = imported.intersection(FORBIDDEN_IMPORTS)
     if blocked:
         findings.append(f"forbidden transport import(s): {', '.join(sorted(blocked))}")
+    calls = {
+        (node.func.value.id, node.func.attr)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+    }
+    blocked_calls = calls.intersection(FORBIDDEN_CALLS)
+    if blocked_calls:
+        rendered = ", ".join(".".join(call) for call in sorted(blocked_calls))
+        findings.append(f"forbidden transport call(s): {rendered}")
     if "http://" in source or "https://" in source:
         findings.append("real URL literal")
     return findings

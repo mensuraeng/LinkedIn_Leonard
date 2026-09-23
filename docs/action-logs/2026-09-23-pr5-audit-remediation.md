@@ -47,6 +47,12 @@ Second final-head review follow-up:
 - Expanded the secret-safe gate to unquoted credential assignments and all Git-tracked text files, without printing matched values.
 - Added regressions for the read contract, unquoted credentials, and repository-wide tracked-file coverage; local suite now has 46 passing tests.
 
+Third final-head review follow-up:
+
+- Expanded the mock-only AST boundary to reject direct `asyncio.open_connection` transport calls in addition to transport imports and URL literals.
+- Kept the secret-safe scanner fail-closed for literal values while permitting only managed environment (`${...}`) and secret-manager (`secret://...`) references.
+- Added regressions for both cases; local suite now has 48 passing tests.
+
 decisão: manter PR #5 aberta sem merge e exigir checks/revisão no head final
 risco: promoção sem CI e revisão associadas ao SHA final não é autorizada
 procedimento: validar Actions, solicitar revisão Codex e revisão independente antes de decidir promotion
