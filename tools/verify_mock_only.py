@@ -5,7 +5,10 @@ import ast
 from pathlib import Path
 import sys
 
-FORBIDDEN_IMPORTS = frozenset({"http", "urllib", "socket", "requests", "oauthlib", "selenium"})
+FORBIDDEN_IMPORTS = frozenset({
+    "aiohttp", "grpc", "http", "httpx", "oauthlib", "requests", "selenium", "socket",
+    "urllib", "urllib3", "websockets",
+})
 SOURCE_ROOT = Path("src")
 
 

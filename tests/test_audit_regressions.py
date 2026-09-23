@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import json
+from pathlib import Path
+import tempfile
 import unittest
+
+from tools.verify_mock_only import violations
+from tools.verify_secret_safe import ASSIGNMENT
 
 from linkedin_leonard import (
     AccountPolicy,
@@ -99,6 +104,20 @@ class AuditRegressionTests(unittest.TestCase):
         self.assertEqual(outcome.status, "account_denied")
         self.assertEqual(gateway.read_count, 0)
 
+    def test_topical_mission_without_account_registry_is_fail_closed(self) -> None:
+        mission = Mission(READ, ACCOUNT, {"format": "summary"}, topic=Topic.ARCHITECTURE)
+        gateway = MockLinkedInGateway()
+        simulator = Simulator(
+            policy=policy(), approval_gate=ApprovalGate(now=lambda: NOW), gateway=gateway,
+            audit=AuditLog(today=lambda: NOW.date()),
+        )
+
+        outcome = simulator.run(mission)
+
+        self.assertFalse(outcome.confirmed)
+        self.assertEqual(outcome.status, "account_registry_required")
+        self.assertEqual(gateway.read_count, 0)
+
     def test_account_registry_denies_untyped_topic_values(self) -> None:
         decision = account_registry().authorize(ACCOUNT, "engineering", AutonomyLevel.L0)  # type: ignore[arg-type]
 
@@ -186,6 +205,17 @@ class AuditRegressionTests(unittest.TestCase):
 
         self.assertEqual(trace_id, "TRACE-LNK-20260923-10000")
         self.assertEqual(event.trace_id, trace_id)
+
+    def test_secret_scanner_detects_prefixed_credential_assignment(self) -> None:
+        self.assertIsNotNone(ASSIGNMENT.search("LINKEDIN_" + "ACCESS" + '_TOKEN = "abcdefgh"'))
+        self.assertIsNotNone(ASSIGNMENT.search("LINKEDIN_" + "CLIENT" + '_SECRET = "abcdefgh"'))
+
+    def test_mock_only_scan_rejects_common_http_clients(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "candidate.py"
+            path.write_text("import httpx\n", encoding="utf-8")
+
+            self.assertIn("forbidden transport import(s): httpx", violations(path))
 
 
 if __name__ == "__main__":

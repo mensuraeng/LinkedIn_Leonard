@@ -584,6 +584,10 @@ class Simulator:
                 self._audit.record("agent_denied", status=agent_decision.reason, trace_id=trace_id,
                                    action=mission.action, account=mission.account)
                 return SimulationOutcome(trace_id, "agent_denied", False)
+        if mission.topic is not None and self._account_registry is None:
+            self._audit.record("account_denied", status="account_registry_required", trace_id=trace_id,
+                               action=mission.action, account=mission.account)
+            return SimulationOutcome(trace_id, "account_registry_required", False)
         if self._account_registry is not None:
             if mission.topic is None:
                 self._audit.record("account_denied", status="topic_required", trace_id=trace_id,

@@ -6,7 +6,7 @@ import re
 import sys
 
 ASSIGNMENT = re.compile(
-    r"(?i)\b(?:api[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|password)\b\s*[:=]\s*['\"]([^'\"]{8,})['\"]"
+    r"(?i)\b(?:[a-z0-9]+_)*(?:api[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|password)\b\s*[:=]\s*['\"]([^'\"]{8,})['\"]"
 )
 SKIP_PARTS = frozenset({".git", "__pycache__"})
 SCAN_ROOTS = (Path("src"), Path("tests"), Path("tools"), Path(".github"))
