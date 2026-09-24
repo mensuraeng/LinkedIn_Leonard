@@ -332,6 +332,27 @@ class AuditRegressionTests(unittest.TestCase):
                     path.write_text(source, encoding="utf-8")
                     self.assertTrue(violations(path, require_allowed_imports=True))
 
+    def test_mock_only_scan_rejects_dunder_reflection_import_bypasses(self) -> None:
+        candidates = (
+            "loader = (lambda: 0).__globals__['__builtins__']['__import__']\nloader('socket')\n",
+            "def f():\n    pass\nloader = f.__globals__['__builtins__']['__import__']\nloader('socket')\n",
+            "loader = getattr(lambda: 0, '__globals__')['__builtins__']['__import__']\nloader('socket')\n",
+            "dunder = '_' * 2\nloader = getattr(lambda: 0, dunder + 'globals' + dunder)[dunder + 'builtins' + dunder][dunder + 'import' + dunder]\nloader('socket')\n",
+            "reflect = getattr\nloader = reflect(lambda: 0, '__globals__')['__builtins__']['__import__']\nloader('socket')\n",
+            "scope = globals\nloader = scope()['__builtins__']['__import__']\nloader('socket')\n",
+            "scope = locals\nloader = scope()['__builtins__']['__import__']\nloader('socket')\n",
+            "loader = (lambda: 0).__getattribute__('__globals__')['__builtins__']['__import__']\nloader('socket')\n",
+            "classes = ().__class__.__base__.__subclasses__()\n",
+            "loader = __loader__\n",
+            "spec = __spec__\n",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "candidate.py"
+            for source in candidates:
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertTrue(violations(path, require_allowed_imports=True))
+
     def test_mock_only_scan_accepts_current_source_tree(self) -> None:
         source_root = Path(__file__).parents[1] / "src"
 

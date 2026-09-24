@@ -15,6 +15,9 @@ FORBIDDEN_TRANSPORT_IMPORTS = frozenset({
 })
 FORBIDDEN_CALLS = frozenset({("asyncio", "open_connection")})
 DYNAMIC_EXECUTION_CALLS = frozenset({"__import__", "compile", "eval", "exec"})
+ALLOWED_DUNDER_NAMES = frozenset({"__all__"})
+ALLOWED_DUNDER_ATTRIBUTES = frozenset({"__setattr__"})
+FORBIDDEN_REFLECTION_NAMES = frozenset({"getattr", "globals", "locals", "vars"})
 SOURCE_ROOT = Path("src")
 
 
@@ -240,8 +243,15 @@ class TransportVisitor(ast.NodeVisitor):
         self.runtime_reflections.add("global")
 
     def visit_Name(self, node: ast.Name) -> None:
-        if node.id == "__builtins__":
-            self.runtime_reflections.add("__builtins__")
+        if node.id.startswith("__") and node.id not in ALLOWED_DUNDER_NAMES:
+            self.runtime_reflections.add(node.id)
+        if node.id in FORBIDDEN_REFLECTION_NAMES:
+            self.runtime_reflections.add(node.id)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if node.attr.startswith("__") and node.attr not in ALLOWED_DUNDER_ATTRIBUTES:
+            self.runtime_reflections.add(node.attr)
+        self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
         dynamic_call = self.dynamic_execution_name(node.func)
@@ -258,10 +268,30 @@ class TransportVisitor(ast.NodeVisitor):
                         self.disallowed_imports.add(canonical)
         if isinstance(node.func, ast.Name) and node.func.id in {"globals", "locals", "vars"}:
             self.runtime_reflections.add(node.func.id)
+        direct_getattr = (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+        )
+        if direct_getattr:
+            attribute = string_value(node.args[1])
+            if attribute is None:
+                self.runtime_reflections.add("dynamic-getattr")
+            elif (
+                attribute.startswith("__")
+                and attribute not in ALLOWED_DUNDER_ATTRIBUTES
+            ):
+                self.runtime_reflections.add(attribute)
         call = self.resolve_call(node.func)
         if call in FORBIDDEN_CALLS:
             self.calls.add(call)
-        self.generic_visit(node)
+        if direct_getattr:
+            for argument in node.args:
+                self.visit(argument)
+            for keyword in node.keywords:
+                self.visit(keyword.value)
+        else:
+            self.generic_visit(node)
 
 
 def violations(path: Path, *, require_allowed_imports: bool = False) -> list[str]:
