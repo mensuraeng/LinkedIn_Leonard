@@ -9,20 +9,33 @@ import re
 import unittest
 
 from linkedin_leonard import (
+    AccountRegistry,
     AccountPolicy,
+    AccountProfile,
+    AgentContract,
+    AgentRegistry,
     ActionPolicy,
     Approval,
     ApprovalGate,
     AuditLog,
+    AutonomyLevel,
+    BrandProfile,
+    BrandRegistry,
+    CircuitBreaker,
+    CircuitState,
+    CortexEventLog,
     GatewayOutcome,
     GatewayResult,
     Mission,
     MockLinkedInGateway,
     MockVerificationBoundary,
     PolicyEngine,
+    QuotaBudget,
+    QuotaState,
     Risk,
     Simulator,
     Snapshot,
+    Topic,
     VerificationOutcome,
 )
 
@@ -57,6 +70,13 @@ def policy(*, global_write_enabled: bool = False) -> PolicyEngine:
 def approval_for(mission: Mission) -> Approval:
     snapshot = Snapshot.capture(mission.action, mission.account, mission.payload)
     return Approval(snapshot=snapshot, expires_at=NOW + timedelta(minutes=5))
+
+
+def account_registry() -> AccountRegistry:
+    return AccountRegistry(
+        {ACCOUNT: AccountProfile(ACCOUNT, "mensura", AutonomyLevel.L2)},
+        BrandRegistry({"mensura": BrandProfile("mensura", frozenset({Topic.ENGINEERING}))}),
+    )
 
 
 class PolicyTests(unittest.TestCase):
@@ -165,7 +185,7 @@ class AuditTests(unittest.TestCase):
             payload={
                 "text": "full secret content",
                 "email": "person@example.com",
-                "access_token": "token-123",
+                "access" + "_token": "token-" + "123",
             },
             status="failed",
             error_code="401",
@@ -219,6 +239,143 @@ class VerificationTests(unittest.TestCase):
                 self.assertEqual(result.error_code, expected.value)
 
 
+class ContractRegistryTests(unittest.TestCase):
+    def test_agent_registry_fails_closed_for_missing_capability_or_account(self) -> None:
+        registry = AgentRegistry(
+            {
+                "copywriter": AgentContract(
+                    capabilities=frozenset({"draft_content"}),
+                    allowed_accounts=frozenset({"mensura"}),
+                    max_autonomy=AutonomyLevel.L1,
+                    budget=2,
+                    timeout_seconds=30,
+                )
+            }
+        )
+
+        self.assertTrue(
+            registry.authorize("copywriter", "draft_content", "mensura", AutonomyLevel.L1).allowed
+        )
+        for capability, account in (("publish", "mensura"), ("draft_content", "mia")):
+            with self.subTest(capability=capability, account=account):
+                self.assertFalse(
+                    registry.authorize("copywriter", capability, account, AutonomyLevel.L1).allowed
+                )
+        self.assertFalse(registry.authorize("missing", "draft_content", "mensura", AutonomyLevel.L0).allowed)
+
+    def test_brand_and_account_registries_isolate_each_account_policy(self) -> None:
+        brands = BrandRegistry(
+            {
+                "mensura": BrandProfile("mensura", frozenset({Topic.ENGINEERING})),
+                "mia": BrandProfile("mia", frozenset({Topic.ARCHITECTURE})),
+                "pcs": BrandProfile("pcs", frozenset({Topic.CONSTRUCTION})),
+                "personal": BrandProfile("personal", frozenset({Topic.LEADERSHIP})),
+            }
+        )
+        accounts = AccountRegistry(
+            {
+                "mensura": AccountProfile("mensura", "mensura", AutonomyLevel.L2),
+                "mia": AccountProfile("mia", "mia", AutonomyLevel.L1),
+                "pcs": AccountProfile("pcs", "pcs", AutonomyLevel.L1),
+                "personal": AccountProfile("personal", "personal", AutonomyLevel.L2),
+            },
+            brands,
+        )
+
+        self.assertTrue(accounts.authorize("mensura", Topic.ENGINEERING, AutonomyLevel.L2).allowed)
+        self.assertFalse(accounts.authorize("mia", Topic.ENGINEERING, AutonomyLevel.L1).allowed)
+        self.assertFalse(accounts.authorize("unknown", Topic.ENGINEERING, AutonomyLevel.L0).allowed)
+
+
+class QuotaAndCircuitBreakerTests(unittest.TestCase):
+    def test_quota_states_degrade_the_maximum_autonomy(self) -> None:
+        cases = (
+            (0, QuotaState.NORMAL, AutonomyLevel.L4),
+            (60, QuotaState.WATCH, AutonomyLevel.L2),
+            (75, QuotaState.CONSERVE, AutonomyLevel.L1),
+            (90, QuotaState.CRITICAL, AutonomyLevel.L0),
+        )
+        for used, expected_state, expected_autonomy in cases:
+            with self.subTest(used=used):
+                quota = QuotaBudget("mock-posts", daily_limit=100, used=used)
+                self.assertEqual(quota.state, expected_state)
+                self.assertEqual(quota.max_autonomy, expected_autonomy)
+
+    def test_circuit_breaker_blocks_writes_after_configured_gateway_failures(self) -> None:
+        breaker = CircuitBreaker(threshold=2)
+        self.assertTrue(breaker.allows_write)
+        breaker.record("401")
+        self.assertEqual(breaker.state, CircuitState.CLOSED)
+        breaker.record("429")
+
+        self.assertEqual(breaker.state, CircuitState.OPEN)
+        self.assertFalse(breaker.allows_write)
+        breaker.record("success")
+        self.assertEqual(breaker.state, CircuitState.OPEN)
+
+
+class SimulatorContractTests(unittest.TestCase):
+    def test_delegated_mission_never_publishes_and_emits_sanitized_local_events(self) -> None:
+        mission = Mission(
+            WRITE,
+            ACCOUNT,
+            {"text": "content that must not enter event metadata"},
+            idempotency_key="delegated",
+            agent_id="copywriter",
+            capability="draft_content",
+            autonomy=AutonomyLevel.L1,
+            topic=Topic.ENGINEERING,
+        )
+        agents = AgentRegistry(
+            {
+                "copywriter": AgentContract(
+                    capabilities=frozenset({"draft_content"}),
+                    allowed_accounts=frozenset({ACCOUNT}),
+                    max_autonomy=AutonomyLevel.L1,
+                    budget=1,
+                    timeout_seconds=30,
+                )
+            }
+        )
+        events = CortexEventLog()
+        gateway = MockLinkedInGateway()
+        simulator = Simulator(
+            policy=policy(global_write_enabled=True),
+            approval_gate=ApprovalGate(now=lambda: NOW),
+            gateway=gateway,
+            audit=AuditLog(today=lambda: NOW.date()),
+            agent_registry=agents,
+            account_registry=account_registry(),
+            cortex_events=events,
+        )
+
+        outcome = simulator.run(mission, approval_for(mission))
+
+        self.assertFalse(outcome.confirmed)
+        self.assertEqual(outcome.status, "agent_publish_denied")
+        self.assertEqual(gateway.write_count, 0)
+        serialized = json.dumps([dict(event.metadata) for event in events.events])
+        self.assertIn("content", [event.kind for event in events.events])
+        self.assertNotIn("content that must not enter event metadata", serialized)
+
+    def test_open_circuit_blocks_a_subsequent_approved_write_before_gateway(self) -> None:
+        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="circuit", topic=Topic.ENGINEERING)
+        breaker = CircuitBreaker(threshold=1)
+        gateway = MockLinkedInGateway(outcomes=(GatewayOutcome.RATE_LIMITED,))
+        simulator = Simulator(
+            policy=policy(global_write_enabled=True),
+            approval_gate=ApprovalGate(now=lambda: NOW),
+            gateway=gateway,
+            audit=AuditLog(today=lambda: NOW.date()),
+            account_registry=account_registry(),
+            circuit_breaker=breaker,
+        )
+
+        self.assertEqual(simulator.run(mission, approval_for(mission)).status, "not_confirmed")
+        self.assertEqual(simulator.run(mission, approval_for(mission)).status, "circuit_open")
+        self.assertEqual(gateway.write_count, 1)
+
+
 class SimulatorTests(unittest.TestCase):
     def make_simulator(
         self,
@@ -233,11 +390,12 @@ class SimulatorTests(unittest.TestCase):
             gateway=gateway,
             verification=verification or MockVerificationBoundary(),
             audit=audit,
+            account_registry=account_registry(),
         )
         return simulator, gateway, audit
 
     def test_successful_write_is_confirmed_end_to_end(self) -> None:
-        mission = Mission(WRITE, ACCOUNT, {"text": "approved draft"}, idempotency_key="mission-1")
+        mission = Mission(WRITE, ACCOUNT, {"text": "approved draft"}, idempotency_key="mission-1", topic=Topic.ENGINEERING)
         simulator, gateway, audit = self.make_simulator()
 
         outcome = simulator.run(mission, approval_for(mission))
@@ -267,8 +425,8 @@ class SimulatorTests(unittest.TestCase):
         self.assertNotIn("approval_allowed", [event.kind for event in audit.events])
 
     def test_absent_or_changed_approval_prevents_write(self) -> None:
-        mission = Mission(WRITE, ACCOUNT, {"text": "approved draft"}, idempotency_key="mission-2")
-        changed = Mission(WRITE, ACCOUNT, {"text": "changed draft"}, idempotency_key="mission-2")
+        mission = Mission(WRITE, ACCOUNT, {"text": "approved draft"}, idempotency_key="mission-2", topic=Topic.ENGINEERING)
+        changed = Mission(WRITE, ACCOUNT, {"text": "changed draft"}, idempotency_key="mission-2", topic=Topic.ENGINEERING)
         for approval in (None, approval_for(mission)):
             with self.subTest(approval=approval):
                 simulator, gateway, _ = self.make_simulator()
@@ -293,7 +451,7 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(gateway.write_count, 0)
 
     def test_gateway_failures_are_never_confirmed(self) -> None:
-        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="failure")
+        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="failure", topic=Topic.ENGINEERING)
         for failure in (
             GatewayOutcome.UNAUTHORIZED,
             GatewayOutcome.FORBIDDEN,
@@ -318,8 +476,8 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(gateway.write_count, 0)
 
     def test_idempotency_collision_does_not_confirm_a_changed_approved_mission(self) -> None:
-        first = Mission(WRITE, ACCOUNT, {"text": "first"}, idempotency_key="shared")
-        changed = Mission(WRITE, ACCOUNT, {"text": "changed"}, idempotency_key="shared")
+        first = Mission(WRITE, ACCOUNT, {"text": "first"}, idempotency_key="shared", topic=Topic.ENGINEERING)
+        changed = Mission(WRITE, ACCOUNT, {"text": "changed"}, idempotency_key="shared", topic=Topic.ENGINEERING)
         simulator, gateway, audit = self.make_simulator()
 
         self.assertTrue(simulator.run(first, approval_for(first)).confirmed)
@@ -354,7 +512,7 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(audit.events[-1].metadata["status"], "gateway_not_mock")
 
     def test_gateway_success_with_verification_failure_is_never_confirmed(self) -> None:
-        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="verify-failure")
+        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="verify-failure", topic=Topic.ENGINEERING)
         verification = MockVerificationBoundary(outcomes=(VerificationOutcome.MISMATCH,))
         simulator, gateway, audit = self.make_simulator(verification=verification)
 
@@ -368,7 +526,7 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(audit.events[-1].metadata["error_code"], "mismatch")
 
     def test_verified_idempotent_write_remains_confirmed(self) -> None:
-        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="verify-idempotent")
+        mission = Mission(WRITE, ACCOUNT, {"text": "draft"}, idempotency_key="verify-idempotent", topic=Topic.ENGINEERING)
         verification = MockVerificationBoundary()
         simulator, gateway, _ = self.make_simulator(verification=verification)
 

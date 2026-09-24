@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from enum import Enum
 import hashlib
@@ -16,7 +16,7 @@ GLOBAL_WRITE_ENABLED = False
 WRITE_CAPABILITY_ENABLED = False
 SAFE_PAYLOAD_KEYS = frozenset({"format", "media_count", "operation", "type", "visibility"})
 SAFE_CODE = re.compile(r"^[a-z0-9_-]{1,64}$")
-TRACE_ID = re.compile(r"^TRACE-LNK-\d{8}-\d{4}$")
+TRACE_ID = re.compile(r"^TRACE-LNK-\d{8}-\d{4,}$")
 SENSITIVE_MARKERS = ("email", "password", "secret", "token")
 
 
@@ -54,6 +54,10 @@ class ActionPolicy:
 class AccountPolicy:
     actions: Mapping[str, ActionPolicy] = field(default_factory=dict)
     write_enabled: bool = False
+
+    def __post_init__(self) -> None:
+        """Detach nested action mappings from caller-owned mutable state."""
+        object.__setattr__(self, "actions", MappingProxyType(dict(self.actions)))
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,214 @@ class PolicyEngine:
             is_write=True,
             reason="write_allowed" if allowed else "write_disabled",
         )
+
+
+class AutonomyLevel(int, Enum):
+    L0 = 0
+    L1 = 1
+    L2 = 2
+    L3 = 3
+    L4 = 4
+
+
+@dataclass(frozen=True)
+class RegistryDecision:
+    allowed: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class AgentContract:
+    capabilities: frozenset[str]
+    allowed_accounts: frozenset[str]
+    max_autonomy: AutonomyLevel
+    budget: int
+    timeout_seconds: int
+
+
+class AgentRegistry:
+    def __init__(self, agents: Mapping[str, AgentContract]) -> None:
+        self._agents = dict(agents)
+
+    def authorize(
+        self, agent_id: str, capability: str, account: str, autonomy: AutonomyLevel
+    ) -> RegistryDecision:
+        agent = self._agents.get(agent_id)
+        if agent is None:
+            return RegistryDecision(False, "agent_unknown")
+        if capability not in agent.capabilities:
+            return RegistryDecision(False, "capability_denied")
+        if account not in agent.allowed_accounts:
+            return RegistryDecision(False, "account_denied")
+        if autonomy > agent.max_autonomy:
+            return RegistryDecision(False, "autonomy_denied")
+        if agent.budget < 1 or agent.timeout_seconds < 1:
+            return RegistryDecision(False, "contract_unavailable")
+        return RegistryDecision(True, "allowed")
+
+
+class Topic(str, Enum):
+    ENGINEERING = "engineering"
+    ARCHITECTURE = "architecture"
+    CONSTRUCTION = "construction"
+    LEADERSHIP = "leadership"
+
+
+@dataclass(frozen=True)
+class BrandProfile:
+    brand_id: str
+    allowed_topics: frozenset[Topic]
+
+
+class BrandRegistry:
+    def __init__(self, brands: Mapping[str, BrandProfile]) -> None:
+        self._brands = dict(brands)
+
+    def allows(self, brand_id: str, topic: Topic) -> bool:
+        brand = self._brands.get(brand_id)
+        return brand is not None and topic in brand.allowed_topics
+
+
+@dataclass(frozen=True)
+class AccountProfile:
+    account_id: str
+    brand_id: str
+    max_autonomy: AutonomyLevel
+
+
+class AccountRegistry:
+    def __init__(self, accounts: Mapping[str, AccountProfile], brands: BrandRegistry) -> None:
+        self._accounts = dict(accounts)
+        self._brands = brands
+
+    def authorize(self, account_id: str, topic: Topic, autonomy: AutonomyLevel) -> RegistryDecision:
+        account = self._accounts.get(account_id)
+        if account is None:
+            return RegistryDecision(False, "account_unknown")
+        if not isinstance(topic, Topic):
+            return RegistryDecision(False, "topic_invalid")
+        if autonomy > account.max_autonomy:
+            return RegistryDecision(False, "autonomy_denied")
+        if not self._brands.allows(account.brand_id, topic):
+            return RegistryDecision(False, "brand_policy_denied")
+        return RegistryDecision(True, "allowed")
+
+
+class QuotaState(str, Enum):
+    NORMAL = "normal"
+    WATCH = "watch"
+    CONSERVE = "conserve"
+    CRITICAL = "critical"
+
+
+@dataclass(frozen=True)
+class QuotaBudget:
+    endpoint: str
+    daily_limit: int
+    used: int = 0
+    reserved: int = 0
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.daily_limit - self.used - self.reserved)
+
+    @property
+    def state(self) -> QuotaState:
+        if self.daily_limit < 1:
+            return QuotaState.CRITICAL
+        utilization = (self.used + self.reserved) / self.daily_limit
+        if utilization >= 0.90:
+            return QuotaState.CRITICAL
+        if utilization >= 0.75:
+            return QuotaState.CONSERVE
+        if utilization >= 0.60:
+            return QuotaState.WATCH
+        return QuotaState.NORMAL
+
+    @property
+    def max_autonomy(self) -> AutonomyLevel:
+        return {
+            QuotaState.NORMAL: AutonomyLevel.L4,
+            QuotaState.WATCH: AutonomyLevel.L2,
+            QuotaState.CONSERVE: AutonomyLevel.L1,
+            QuotaState.CRITICAL: AutonomyLevel.L0,
+        }[self.state]
+
+    def consume(self) -> "QuotaBudget":
+        """Return the next immutable budget after one gateway operation."""
+        return replace(self, used=self.used + 1)
+
+
+class CircuitState(str, Enum):
+    CLOSED = "closed"
+    OPEN = "open"
+
+
+class CircuitBreaker:
+    def __init__(self, threshold: int = 1) -> None:
+        if threshold < 1:
+            raise ValueError("threshold must be positive")
+        self._threshold = threshold
+        self._failures = 0
+        self._state = CircuitState.CLOSED
+
+    @property
+    def state(self) -> CircuitState:
+        return self._state
+
+    @property
+    def allows_write(self) -> bool:
+        return self._state is CircuitState.CLOSED
+
+    def record(self, error_code: str | None) -> None:
+        if self._state is CircuitState.OPEN:
+            return
+        if error_code in {GatewayOutcome.UNAUTHORIZED.value, GatewayOutcome.FORBIDDEN.value,
+                          GatewayOutcome.RATE_LIMITED.value, GatewayOutcome.TIMEOUT.value}:
+            self._failures += 1
+            if self._failures >= self._threshold:
+                self._state = CircuitState.OPEN
+
+
+@dataclass(frozen=True)
+class CortexEvent:
+    kind: str
+    trace_id: str
+    metadata: Mapping[str, str | int]
+
+
+class CortexEventKind(str, Enum):
+    CONTENT = "content"
+    APPROVAL = "approval"
+    PUBLICATION_SIMULATED = "publication_simulated"
+
+
+class CortexEventLog:
+    """In-memory, sanitized event staging for a future Cortex integration."""
+
+    def __init__(self) -> None:
+        self._events: list[CortexEvent] = []
+
+    def record(
+        self, kind: CortexEventKind | str, trace_id: str, snapshot: "Snapshot", status: str
+    ) -> None:
+        try:
+            event_kind = CortexEventKind(kind)
+        except ValueError as error:
+            raise ValueError("cortex event kind is not allowlisted") from error
+        if not TRACE_ID.fullmatch(trace_id):
+            raise ValueError("trace_id must match TRACE-LNK-YYYYMMDD-XXXX+")
+        self._events.append(
+            CortexEvent(
+                event_kind.value,
+                trace_id,
+                MappingProxyType({"payload_sha256": snapshot.payload_sha256, "status": _safe_code(status)}),
+            )
+        )
+
+    @property
+    def events(self) -> tuple[CortexEvent, ...]:
+        return tuple(self._events)
 
 
 @dataclass(frozen=True)
@@ -159,10 +371,16 @@ class AuditLog:
         status: str,
         error_code: str | None = None,
         trace_id: str | None = None,
+        action: str | None = None,
+        account: str | None = None,
     ) -> AuditEvent:
         if trace_id is not None and not TRACE_ID.fullmatch(trace_id):
-            raise ValueError("trace_id must match TRACE-LNK-YYYYMMDD-XXXX")
+            raise ValueError("trace_id must match TRACE-LNK-YYYYMMDD-XXXX+")
         metadata: dict[str, str | int] = {"status": _safe_code(status)}
+        if action is not None:
+            metadata["action"] = _safe_code(action)
+        if account is not None:
+            metadata["account"] = _safe_code(account)
         if payload is not None:
             safe_keys = sorted(set(payload).intersection(SAFE_PAYLOAD_KEYS))
             metadata.update(
@@ -257,7 +475,13 @@ class MockLinkedInGateway:
             return stored_result
         self.write_count += 1
         result = self._next_result("WRITE", self.write_count, snapshot)
-        self._receipts[idempotency_key] = (request_fingerprint, result)
+        # 429/timeout are explicitly transient and must remain retryable. 401/403
+        # are terminal mock outcomes and may be deduplicated with this key.
+        if result.confirmed or result.error_code in {
+            GatewayOutcome.UNAUTHORIZED.value,
+            GatewayOutcome.FORBIDDEN.value,
+        }:
+            self._receipts[idempotency_key] = (request_fingerprint, result)
         return result
 
 
@@ -293,6 +517,10 @@ class Mission:
     account: str
     payload: Mapping[str, Any]
     idempotency_key: str = ""
+    agent_id: str = ""
+    capability: str = ""
+    autonomy: AutonomyLevel = AutonomyLevel.L0
+    topic: Topic | None = None
 
 
 @dataclass(frozen=True)
@@ -313,39 +541,105 @@ class Simulator:
         gateway: object,
         verification: object | None = None,
         audit: AuditLog,
+        agent_registry: AgentRegistry | None = None,
+        account_registry: AccountRegistry | None = None,
+        quota: QuotaBudget | None = None,
+        circuit_breaker: CircuitBreaker | None = None,
+        cortex_events: CortexEventLog | None = None,
     ) -> None:
         self._policy = policy
         self._approval_gate = approval_gate
         self._gateway = gateway
         self._verification = verification or MockVerificationBoundary()
         self._audit = audit
+        self._agent_registry = agent_registry
+        self._account_registry = account_registry
+        self._quota = quota
+        self._circuit_breaker = circuit_breaker
+        self._cortex_events = cortex_events
 
     def run(self, mission: Mission, approval: Approval | None = None) -> SimulationOutcome:
         trace_id = self._audit.new_trace_id()
         self._audit.record(
-            "mission_received", payload=mission.payload, status="received", trace_id=trace_id
+            "mission_received", payload=mission.payload, status="received", trace_id=trace_id,
+            action=mission.action, account=mission.account,
         )
+        snapshot = Snapshot.capture(mission.action, mission.account, mission.payload)
+        if self._cortex_events is not None:
+            self._cortex_events.record("content", trace_id, snapshot, "received")
         if not _is_canonical_mock_boundary(self._gateway, MockLinkedInGateway):
-            self._audit.record("mock_boundary_denied", status="gateway_not_mock", trace_id=trace_id)
+            self._audit.record("mock_boundary_denied", status="gateway_not_mock", trace_id=trace_id,
+                               action=mission.action, account=mission.account)
             return SimulationOutcome(trace_id, "mock_boundary_denied", False)
         if not _is_canonical_mock_boundary(self._verification, MockVerificationBoundary):
-            self._audit.record("mock_boundary_denied", status="verification_not_mock", trace_id=trace_id)
+            self._audit.record("mock_boundary_denied", status="verification_not_mock", trace_id=trace_id,
+                               action=mission.action, account=mission.account)
             return SimulationOutcome(trace_id, "mock_boundary_denied", False)
+        has_agent_identity = bool(mission.agent_id or mission.capability)
+        if has_agent_identity and self._agent_registry is None:
+            self._audit.record("agent_denied", status="agent_registry_required", trace_id=trace_id,
+                               action=mission.action, account=mission.account)
+            return SimulationOutcome(trace_id, "agent_registry_required", False)
+        if has_agent_identity and self._agent_registry is not None:
+            agent_decision = self._agent_registry.authorize(
+                mission.agent_id, mission.capability, mission.account, mission.autonomy
+            )
+            if not agent_decision.allowed:
+                self._audit.record("agent_denied", status=agent_decision.reason, trace_id=trace_id,
+                                   action=mission.action, account=mission.account)
+                return SimulationOutcome(trace_id, "agent_denied", False)
         decision = self._policy.decide(mission.action, mission.account)
         if not decision.allowed:
-            self._audit.record("policy_denied", status=decision.reason, trace_id=trace_id)
+            self._audit.record("policy_denied", status=decision.reason, trace_id=trace_id,
+                               action=mission.action, account=mission.account)
             return SimulationOutcome(trace_id, "policy_denied", False)
-        self._audit.record("policy_allowed", status="allowed", trace_id=trace_id)
+        if self._account_registry is None and (mission.topic is not None or decision.is_write):
+            self._audit.record("account_denied", status="account_registry_required", trace_id=trace_id,
+                               action=mission.action, account=mission.account)
+            return SimulationOutcome(trace_id, "account_registry_required", False)
+        if self._account_registry is not None:
+            if mission.topic is None and decision.is_write:
+                self._audit.record("account_denied", status="topic_required", trace_id=trace_id,
+                                   action=mission.action, account=mission.account)
+                return SimulationOutcome(trace_id, "account_denied", False)
+            if mission.topic is not None:
+                account_decision = self._account_registry.authorize(
+                    mission.account, mission.topic, mission.autonomy
+                )
+                if not account_decision.allowed:
+                    self._audit.record("account_denied", status=account_decision.reason, trace_id=trace_id,
+                                       action=mission.action, account=mission.account)
+                    return SimulationOutcome(trace_id, "account_denied", False)
+        if has_agent_identity and decision.is_write:
+            self._audit.record("agent_publish_denied", status="orchestrator_only", trace_id=trace_id,
+                               action=mission.action, account=mission.account)
+            return SimulationOutcome(trace_id, "agent_publish_denied", False)
+        self._audit.record("policy_allowed", status="allowed", trace_id=trace_id,
+                           action=mission.action, account=mission.account)
 
         if decision.requires_approval:
             if not self._approval_gate.check(
                 approval, mission.action, mission.account, mission.payload
             ):
-                self._audit.record("approval_denied", status="denied", trace_id=trace_id)
+                self._audit.record("approval_denied", status="denied", trace_id=trace_id,
+                                   action=mission.action, account=mission.account)
                 return SimulationOutcome(trace_id, "approval_denied", False)
-            self._audit.record("approval_allowed", status="allowed", trace_id=trace_id)
+            self._audit.record("approval_allowed", status="allowed", trace_id=trace_id,
+                               action=mission.action, account=mission.account)
+            if self._cortex_events is not None:
+                self._cortex_events.record("approval", trace_id, snapshot, "allowed")
 
-        snapshot = Snapshot.capture(mission.action, mission.account, mission.payload)
+        if decision.is_write and self._circuit_breaker is not None and not self._circuit_breaker.allows_write:
+            self._audit.record("circuit_open", status="write_blocked", trace_id=trace_id,
+                               action=mission.action, account=mission.account)
+            return SimulationOutcome(trace_id, "circuit_open", False)
+        if self._quota is not None and (
+            (decision.is_write and self._quota.state is QuotaState.CRITICAL)
+            or mission.autonomy > self._quota.max_autonomy
+        ):
+            self._audit.record("quota_denied", status=self._quota.state.value, trace_id=trace_id,
+                               action=mission.action, account=mission.account)
+            return SimulationOutcome(trace_id, "quota_denied", False)
         gateway = cast(MockLinkedInGateway, self._gateway)
         result = (
             gateway.write(
@@ -359,19 +653,27 @@ class Simulator:
             if decision.is_write
             else gateway.read(mission.action, mission.account, mission.payload)
         )
+        if self._quota is not None:
+            self._quota = self._quota.consume()
         self._audit.record(
             "gateway_result",
             payload=mission.payload,
             status="confirmed" if result.confirmed else "failed",
             error_code=result.error_code,
             trace_id=trace_id,
+            action=mission.action,
+            account=mission.account,
         )
+        if decision.is_write and self._circuit_breaker is not None:
+            self._circuit_breaker.record(result.error_code)
         if not result.confirmed:
             self._audit.record(
                 "verification_failed",
                 status="not_confirmed",
                 error_code=result.error_code,
                 trace_id=trace_id,
+                action=mission.action,
+                account=mission.account,
             )
             return SimulationOutcome(
                 trace_id, "not_confirmed", False, result.receipt_id, result.error_code
@@ -384,7 +686,11 @@ class Simulator:
             status="confirmed" if verification_result.confirmed else "not_confirmed",
             error_code=verification_result.error_code,
             trace_id=trace_id,
+            action=mission.action,
+            account=mission.account,
         )
+        if verification_result.confirmed and decision.is_write and self._cortex_events is not None:
+            self._cortex_events.record("publication_simulated", trace_id, snapshot, "confirmed")
         return SimulationOutcome(
             trace_id,
             "confirmed" if verification_result.confirmed else "verification_failed",

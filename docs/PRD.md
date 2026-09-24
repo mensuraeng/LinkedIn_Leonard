@@ -1,7 +1,7 @@
 # PRD — LEONARD LINKEDIN CONTROL TOWER
 
 **Versão:** 1.0  
-**Status:** Production Ready Specification  
+**Status:** Especificação de produto; implementação local-only em promoção governada
 **Owner:** Leonard — Agente Hermes  
 **Plataforma-mãe:** Córtex  
 **Domínio:** Social Intelligence / LinkedIn Operations  
