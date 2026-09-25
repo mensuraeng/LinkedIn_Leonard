@@ -211,7 +211,17 @@ Somente após testes satisfatórios o adapter real pode substituir o mock.
 
 ### Estado de promoção
 
-Use sempre `IMPLEMENTED → REVIEWED → VALIDATED → PROMOTED`. `MERGED` é atributo Git, não conclusão operacional. Waves 00–03 estão `MERGED_WITH_FINDINGS` até a revisão do head final; Wave 04 permanece sem autorização de merge ou promotion.
+Use sempre `IMPLEMENTED → REVIEWED → VALIDATED → PROMOTED`. `MERGED` é atributo Git, não conclusão operacional.
+
+A Wave 04 foi promovida exclusivamente no boundary local-only depois da revisão do head final `ebbda69649bf2ac82d8406c10225ed7e03377339`, CI verde no run `36043751192`, encerramento das review threads e merge commit `cbcd18e44a6e9f3b0c4121a28301c1a41baf38b4` na `main`.
+
+```text
+REAL_LINKEDIN_WRITE = DISABLED
+OAUTH = NOT_CONFIGURED
+WAVE_05 = AUTHORIZED_TO_START
+```
+
+`WAVE_05 = AUTHORIZED_TO_START` autoriza somente uma nova branch e seu ciclo de implementação/revisão. Não autoriza app registration, segredo real, consentimento, token exchange, capability real ou qualquer ação no LinkedIn.
 
 ## 11. Segurança
 

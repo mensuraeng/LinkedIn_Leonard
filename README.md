@@ -4,7 +4,7 @@ Sistema de Social Intelligence e operação de LinkedIn orquestrado por **Leonar
 
 ## Estado
 
-- Status: Wave 04 local-only simulator — IMPLEMENTED; final-head review and promotion remain gated
+- Status: Wave 04 local-only simulator — PROMOTED e mergeada na `main` pelo PR #5
 - Owner operacional: Leonard / Hermes
 - Repositório canônico: `mensuraeng/LinkedIn_Leonard`
 - Branch canônica: `main`
@@ -54,7 +54,17 @@ Se mudou o sistema, a configuração versionável, a documentação, um schema, 
 
 ## Estado de promoção
 
-O ciclo de evidência é `IMPLEMENTED → REVIEWED → VALIDATED → PROMOTED`. `MERGED` é somente atributo Git e não substitui nenhuma etapa. Waves 00–03 permanecem `MERGED_WITH_FINDINGS` até a revisão do head final confirmar as correções; Wave 04 não deve ser promovida nem receber merge nesta fase.
+O ciclo de evidência é `IMPLEMENTED → REVIEWED → VALIDATED → PROMOTED`. `MERGED` é somente atributo Git e não substitui nenhuma etapa.
+
+A Wave 04 completou o ciclo local-only: head final `ebbda69649bf2ac82d8406c10225ed7e03377339`, CI `local-only-contracts` verde no run `36043751192`, zero review threads pendentes e merge commit `cbcd18e44a6e9f3b0c4121a28301c1a41baf38b4` na `main` em 24/09/2026. Essa promoção vale apenas para a fundação simulada e os contratos locais.
+
+Estado de borda após a promoção:
+
+- `REAL_LINKEDIN_WRITE = DISABLED`
+- `OAUTH = NOT_CONFIGURED`
+- `WAVE_05 = AUTHORIZED_TO_START` sob branch, testes, revisão independente e gates próprios
+
+Nenhuma credencial, token, scope, capability ou integração real foi promovida com a Wave 04.
 
 ## Segurança
 
