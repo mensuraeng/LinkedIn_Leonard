@@ -25,3 +25,16 @@ temp/
 *.sqlite
 *.sqlite3
 *.db
+# Backup safety exclusions
+.env*
+*.pem
+*.key
+secrets/
+secure/
+*.db
+*.sqlite*
+sessions/
+logs/
+caches/
+node_modules/
+__pycache__/
